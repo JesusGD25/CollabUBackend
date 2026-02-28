@@ -1,0 +1,46 @@
+{
+  "name": "collab-u-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Collab-U Backend - Microservices Architecture",
+  "scripts": {
+    "docker:up": "cd docker && docker compose up -d",
+    "docker:down": "cd docker && docker compose down",
+    "docker:logs": "cd docker && docker compose logs -f",
+    "docker:ps": "cd docker && docker compose ps",
+    "shared:build": "cd shared && npm run build",
+    "install:all": "npm run shared:install && npm run services:install",
+    "shared:install": "cd shared && npm install",
+    "services:install": "node scripts/install-all.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@nestjs/axios": "^4.0.1",
+    "@nestjs/config": "^4.0.3",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/passport": "^11.0.5",
+    "@nestjs/swagger": "^11.2.6",
+    "@nestjs/throttler": "^6.5.0",
+    "amqplib": "^0.10.9",
+    "axios": "^1.13.6",
+    "bcrypt": "^6.0.0",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.4",
+    "http-proxy-middleware": "^3.0.5",
+    "ioredis": "^5.10.0",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "passport-local": "^1.0.0",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.8",
+    "@types/bcrypt": "^6.0.0",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/passport-local": "^1.0.38",
+    "@types/uuid": "^10.0.0"
+  }
+}

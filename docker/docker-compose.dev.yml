@@ -1,0 +1,17 @@
+# Override para desarrollo local - solo infraestructura
+# Los servicios NestJS se ejecutan fuera de Docker durante desarrollo
+# Uso: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+services:
+  postgres:
+    ports:
+      - "5435:5432"
+
+  rabbitmq:
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  redis:
+    ports:
+      - "6379:6379"

@@ -1,0 +1,452 @@
+import {
+  Injectable,
+  ConflictException,
+  UnauthorizedException,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, MoreThan } from 'typeorm';
+import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
+import { EventPublisher } from '@collab-u/shared';
+
+import { User, UserRole } from './entities/user.entity';
+import { RefreshToken } from './entities/refresh-token.entity';
+import { VerificationToken, VerificationTokenType } from './entities/verification-token.entity';
+
+import { RegisterDto } from './dto/register.dto';
+import { LoginDto } from './dto/login.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+
+const SALT_ROUNDS = 12;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_DURATION_MINUTES = 30;
+const ACCESS_TOKEN_EXPIRY = '1h';
+const REFRESH_TOKEN_DAYS = 7;
+const VERIFICATION_TOKEN_HOURS = 24;
+const RESET_TOKEN_HOURS = 1;
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+    @InjectRepository(RefreshToken)
+    private readonly refreshTokenRepo: Repository<RefreshToken>,
+    @InjectRepository(VerificationToken)
+    private readonly verificationTokenRepo: Repository<VerificationToken>,
+    private readonly jwtService: JwtService,
+    private readonly eventPublisher: EventPublisher,
+  ) {}
+
+  // ─── REGISTER ───────────────────────────────────────────────────────
+  async register(dto: RegisterDto): Promise<{ message: string; userId: string }> {
+    // 1. Verificar que email no exista
+    const existing = await this.userRepo.findOne({ where: { email: dto.email } });
+    if (existing) {
+      throw new ConflictException('El email ya está registrado');
+    }
+
+    // 2. Hash password
+    const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
+
+    // 3. Crear usuario
+    const user = this.userRepo.create({
+      email: dto.email,
+      passwordHash,
+      role: dto.role,
+    });
+    const savedUser = await this.userRepo.save(user);
+
+    // 4. Generar verification token
+    const verificationToken = this.verificationTokenRepo.create({
+      userId: savedUser.id,
+      token: uuidv4(),
+      type: VerificationTokenType.EMAIL_VERIFICATION,
+      expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_HOURS * 60 * 60 * 1000),
+    });
+    await this.verificationTokenRepo.save(verificationToken);
+
+    // 5. Publicar evento auth.user.created
+    await this.eventPublisher.publish(
+      'auth.user.created',
+      { userId: savedUser.id, email: savedUser.email, role: savedUser.role },
+      'auth-service',
+    );
+
+    this.logger.log(`Usuario registrado: ${savedUser.email} [${savedUser.id}]`);
+
+    // 6. Retornar — incluimos el token de verificación para testing
+    return {
+      message: 'Usuario registrado exitosamente. Revisa tu email para verificar la cuenta.',
+      userId: savedUser.id,
+    };
+  }
+
+  // ─── LOGIN ──────────────────────────────────────────────────────────
+  async login(dto: LoginDto): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    user: { id: string; email: string; role: UserRole; isVerified: boolean; isActive: boolean };
+    expiresIn: number;
+  }> {
+    // 1. Buscar usuario
+    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+    if (!user) {
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    // 2. Verificar que no esté bloqueado
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const minutesLeft = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000);
+      throw new UnauthorizedException(
+        `Cuenta bloqueada. Intenta de nuevo en ${minutesLeft} minutos`,
+      );
+    }
+
+    // 3. Verificar que esté activo
+    if (!user.isActive) {
+      throw new UnauthorizedException('La cuenta está desactivada');
+    }
+
+    // 4. Comparar password
+    const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
+    if (!isPasswordValid) {
+      // Incrementar intentos fallidos
+      user.failedLoginAttempts += 1;
+      if (user.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        user.lockedUntil = new Date(Date.now() + LOCK_DURATION_MINUTES * 60 * 1000);
+        this.logger.warn(`Cuenta bloqueada por intentos fallidos: ${user.email}`);
+      }
+      await this.userRepo.save(user);
+      throw new UnauthorizedException('Credenciales inválidas');
+    }
+
+    // 5. Resetear intentos fallidos, actualizar lastLogin
+    user.failedLoginAttempts = 0;
+    user.lockedUntil = null;
+    user.lastLogin = new Date();
+    await this.userRepo.save(user);
+
+    // 6. Generar access token
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const accessToken = this.jwtService.sign(payload);
+
+    // 7. Generar refresh token
+    const refreshTokenValue = uuidv4();
+    const refreshToken = this.refreshTokenRepo.create({
+      userId: user.id,
+      token: refreshTokenValue,
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000),
+    });
+    await this.refreshTokenRepo.save(refreshToken);
+
+    this.logger.log(`Login exitoso: ${user.email}`);
+
+    // 8. Retornar
+    return {
+      accessToken,
+      refreshToken: refreshTokenValue,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        isVerified: user.isVerified,
+        isActive: user.isActive,
+      },
+      expiresIn: 3600, // 1 hora en segundos
+    };
+  }
+
+  // ─── VALIDATE USER (para LocalStrategy) ─────────────────────────────
+  async validateUser(email: string, password: string): Promise<User | null> {
+    const user = await this.userRepo.findOne({ where: { email, isActive: true } });
+    if (!user) return null;
+
+    const isValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isValid) return null;
+
+    return user;
+  }
+
+  // ─── REFRESH TOKEN ──────────────────────────────────────────────────
+  async refreshToken(dto: RefreshTokenDto): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    expiresIn: number;
+  }> {
+    // 1. Buscar refresh token (no revocado, no expirado)
+    const existingToken = await this.refreshTokenRepo.findOne({
+      where: {
+        token: dto.refreshToken,
+        revoked: false,
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+
+    if (!existingToken) {
+      throw new UnauthorizedException('Refresh token inválido o expirado');
+    }
+
+    // Obtener usuario
+    const user = await this.userRepo.findOne({ where: { id: existingToken.userId, isActive: true } });
+    if (!user) {
+      throw new UnauthorizedException('Usuario no encontrado o desactivado');
+    }
+
+    // 2. Revocar el token actual (rotación)
+    const newRefreshTokenValue = uuidv4();
+    existingToken.revoked = true;
+    existingToken.revokedAt = new Date();
+    existingToken.replacedByToken = newRefreshTokenValue;
+    await this.refreshTokenRepo.save(existingToken);
+
+    // 3. Generar nuevo access + refresh token
+    const payload = { sub: user.id, email: user.email, role: user.role };
+    const accessToken = this.jwtService.sign(payload);
+
+    const newRefreshToken = this.refreshTokenRepo.create({
+      userId: user.id,
+      token: newRefreshTokenValue,
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000),
+    });
+    await this.refreshTokenRepo.save(newRefreshToken);
+
+    return {
+      accessToken,
+      refreshToken: newRefreshTokenValue,
+      expiresIn: 3600,
+    };
+  }
+
+  // ─── LOGOUT ─────────────────────────────────────────────────────────
+  async logout(userId: string, refreshToken: string): Promise<void> {
+    const token = await this.refreshTokenRepo.findOne({
+      where: { userId, token: refreshToken, revoked: false },
+    });
+
+    if (token) {
+      token.revoked = true;
+      token.revokedAt = new Date();
+      await this.refreshTokenRepo.save(token);
+    }
+
+    this.logger.log(`Logout: usuario ${userId}`);
+  }
+
+  // ─── LOGOUT ALL ─────────────────────────────────────────────────────
+  async logoutAll(userId: string): Promise<void> {
+    await this.refreshTokenRepo.update(
+      { userId, revoked: false },
+      { revoked: true, revokedAt: new Date() },
+    );
+    this.logger.log(`Logout all: usuario ${userId}`);
+  }
+
+  // ─── VERIFY EMAIL ──────────────────────────────────────────────────
+  async verifyEmail(dto: VerifyEmailDto): Promise<{ message: string }> {
+    // 1. Buscar verification token
+    const verificationToken = await this.verificationTokenRepo.findOne({
+      where: {
+        token: dto.token,
+        type: VerificationTokenType.EMAIL_VERIFICATION,
+        used: false,
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+
+    if (!verificationToken) {
+      throw new BadRequestException('Token de verificación inválido o expirado');
+    }
+
+    // 2. Marcar token como usado
+    verificationToken.used = true;
+    verificationToken.usedAt = new Date();
+    await this.verificationTokenRepo.save(verificationToken);
+
+    // 3. Actualizar user.isVerified
+    await this.userRepo.update(verificationToken.userId, { isVerified: true });
+
+    // 4. Publicar evento
+    await this.eventPublisher.publish(
+      'auth.user.verified',
+      { userId: verificationToken.userId },
+      'auth-service',
+    );
+
+    this.logger.log(`Email verificado: usuario ${verificationToken.userId}`);
+
+    return { message: 'Email verificado exitosamente' };
+  }
+
+  // ─── FORGOT PASSWORD ───────────────────────────────────────────────
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string; token?: string }> {
+    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+
+    // Siempre retornamos el mismo mensaje (prevenir enumeración de emails)
+    const successMessage = 'Si el email está registrado, recibirás un enlace para restablecer tu contraseña';
+
+    if (!user) {
+      return { message: successMessage };
+    }
+
+    // Generar token de reset
+    const resetToken = this.verificationTokenRepo.create({
+      userId: user.id,
+      token: uuidv4(),
+      type: VerificationTokenType.PASSWORD_RESET,
+      expiresAt: new Date(Date.now() + RESET_TOKEN_HOURS * 60 * 60 * 1000),
+    });
+    await this.verificationTokenRepo.save(resetToken);
+
+    this.logger.log(`Token de reset generado para: ${user.email}`);
+
+    // En producción: enviar email. Por ahora retornamos el token para testing
+    return {
+      message: successMessage,
+      token: resetToken.token, // Solo para dev/testing
+    };
+  }
+
+  // ─── RESET PASSWORD ────────────────────────────────────────────────
+  async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
+    // 1. Buscar token
+    const resetToken = await this.verificationTokenRepo.findOne({
+      where: {
+        token: dto.token,
+        type: VerificationTokenType.PASSWORD_RESET,
+        used: false,
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+
+    if (!resetToken) {
+      throw new BadRequestException('Token de restablecimiento inválido o expirado');
+    }
+
+    // 2. Hash nueva password
+    const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+
+    // 3. Actualizar password
+    await this.userRepo.update(resetToken.userId, {
+      passwordHash,
+      passwordChangedAt: new Date(),
+    });
+
+    // 4. Marcar token como usado
+    resetToken.used = true;
+    resetToken.usedAt = new Date();
+    await this.verificationTokenRepo.save(resetToken);
+
+    // 5. Revocar todos los refresh tokens
+    await this.refreshTokenRepo.update(
+      { userId: resetToken.userId, revoked: false },
+      { revoked: true, revokedAt: new Date() },
+    );
+
+    this.logger.log(`Contraseña restablecida: usuario ${resetToken.userId}`);
+
+    return { message: 'Contraseña restablecida exitosamente' };
+  }
+
+  // ─── CHANGE PASSWORD ───────────────────────────────────────────────
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ message: string }> {
+    const user = await this.userRepo.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    // 1. Verificar password actual
+    const isValid = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+    if (!isValid) {
+      throw new UnauthorizedException('La contraseña actual es incorrecta');
+    }
+
+    // 2. Hash nueva password
+    const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+
+    // 3. Actualizar
+    await this.userRepo.update(userId, {
+      passwordHash,
+      passwordChangedAt: new Date(),
+    });
+
+    // 4. Revocar todos los refresh tokens
+    await this.refreshTokenRepo.update(
+      { userId, revoked: false },
+      { revoked: true, revokedAt: new Date() },
+    );
+
+    this.logger.log(`Contraseña cambiada: usuario ${userId}`);
+
+    return { message: 'Contraseña cambiada exitosamente' };
+  }
+
+  // ─── VALIDATE TOKEN (para API Gateway) ─────────────────────────────
+  async validateToken(token: string): Promise<{
+    valid: boolean;
+    id: string;
+    email: string;
+    role: string;
+  }> {
+    try {
+      const payload = this.jwtService.verify(token);
+      const user = await this.userRepo.findOne({
+        where: { id: payload.sub, isActive: true },
+      });
+
+      if (!user) {
+        throw new UnauthorizedException('Usuario no encontrado o desactivado');
+      }
+
+      return {
+        valid: true,
+        id: user.id,
+        email: user.email,
+        role: user.role,
+      };
+    } catch {
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+  }
+
+  // ─── GET USER BY ID (interno) ──────────────────────────────────────
+  async getUserById(id: string): Promise<{
+    id: string;
+    email: string;
+    role: UserRole;
+    isVerified: boolean;
+    isActive: boolean;
+  }> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      isVerified: user.isVerified,
+      isActive: user.isActive,
+    };
+  }
+
+  // ─── GET USER ROLE (interno) ───────────────────────────────────────
+  async getUserRole(id: string): Promise<{ role: UserRole }> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+    return { role: user.role };
+  }
+}
