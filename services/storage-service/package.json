@@ -46,6 +46,7 @@
     "@types/amqplib": "^0.10.8",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/multer": "^2.1.0",
     "@types/node": "^22.10.7",
     "@types/supertest": "^6.0.2",
     "@types/uuid": "^10.0.0",
@@ -79,6 +80,9 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "transformIgnorePatterns": [
+      "node_modules/(?!(uuid)/)"
+    ]
   }
 }
