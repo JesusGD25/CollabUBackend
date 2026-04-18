@@ -33,7 +33,7 @@ import { UpdateInterestDto } from './dto/update-interest.dto';
 import { StudentSearchQueryDto } from './dto/student-search-query.dto';
 
 @ApiTags('Students')
-@Controller('students')
+@Controller('api/v1/students')
 export class StudentController {
   constructor(private readonly studentService: StudentService) {}
 

@@ -71,14 +71,18 @@ export class CompanyService {
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
     await this.profileRepo.save(saved);
 
+    const createdProfile = await this.getProfile(saved.userId);
+
     await this.eventPublisher.publish('company.profile.created', {
-      userId: saved.userId,
-      companyId: saved.id,
-      companyName: saved.companyName,
+      userId: createdProfile.userId,
+      companyId: createdProfile.id,
+      companyName: createdProfile.companyName,
+      profileCompleteness: createdProfile.profileCompleteness,
+      isOnboardingReady: this.isOnboardingReady(createdProfile),
     }, 'company-service');
 
     this.logger.log(`Perfil de empresa creado: ${saved.id} para usuario ${saved.userId}`);
-    return saved;
+    return createdProfile;
   }
 
   async getProfile(userId: string): Promise<CompanyProfile> {
@@ -111,12 +115,10 @@ export class CompanyService {
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
     await this.profileRepo.save(saved);
 
-    await this.eventPublisher.publish('company.profile.updated', {
-      userId: saved.userId,
-      companyId: saved.id,
-    }, 'company-service');
+    const updatedProfile = await this.getProfile(userId);
+    await this.publishProfileUpdated(updatedProfile);
 
-    return this.getProfile(userId);
+    return updatedProfile;
   }
 
   async searchCompanies(query: CompanySearchQueryDto): Promise<PaginatedCompaniesResponse> {
@@ -363,6 +365,37 @@ export class CompanyService {
     return score;
   }
 
+  private isOnboardingReady(profile: CompanyProfile): boolean {
+    const hasCompanyName = !!profile.companyName?.trim();
+    const hasIndustry = !!profile.industry?.trim();
+    const hasDescription = !!profile.description?.trim();
+    const hasHeadquarters = !!profile.headquartersCity?.trim();
+    const hasContact = (profile.contacts?.length ?? 0) > 0;
+    const hasBusinessArea = (profile.businessAreas?.length ?? 0) > 0;
+
+    return (
+      hasCompanyName &&
+      hasIndustry &&
+      hasDescription &&
+      hasHeadquarters &&
+      hasContact &&
+      hasBusinessArea
+    );
+  }
+
+  private async publishProfileUpdated(profile: CompanyProfile): Promise<void> {
+    await this.eventPublisher.publish(
+      'company.profile.updated',
+      {
+        userId: profile.userId,
+        companyId: profile.id,
+        profileCompleteness: profile.profileCompleteness,
+        isOnboardingReady: this.isOnboardingReady(profile),
+      },
+      'company-service',
+    );
+  }
+
   private async recalculateCompleteness(userId: string): Promise<void> {
     const profile = await this.profileRepo.findOne({
       where: { userId },
@@ -371,6 +404,7 @@ export class CompanyService {
     if (profile) {
       profile.profileCompleteness = this.calculateProfileCompleteness(profile);
       await this.profileRepo.save(profile);
+      await this.publishProfileUpdated(profile);
     }
   }
 }

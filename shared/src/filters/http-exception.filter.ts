@@ -12,6 +12,20 @@ import { Response } from 'express';
 export class GlobalHttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('ExceptionFilter');
 
+  private isHttpExceptionLike(
+    exception: unknown,
+  ): exception is Pick<HttpException, 'getStatus' | 'getResponse'> {
+    if (typeof exception !== 'object' || exception === null) {
+      return false;
+    }
+
+    const maybeHttpException = exception as Record<string, unknown>;
+    return (
+      typeof maybeHttpException.getStatus === 'function' &&
+      typeof maybeHttpException.getResponse === 'function'
+    );
+  }
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -21,7 +35,7 @@ export class GlobalHttpExceptionFilter implements ExceptionFilter {
     let message = 'Error interno del servidor';
     let error = 'Internal Server Error';
 
-    if (exception instanceof HttpException) {
+    if (exception instanceof HttpException || this.isHttpExceptionLike(exception)) {
       statusCode = exception.getStatus();
       const exceptionResponse = exception.getResponse();
 

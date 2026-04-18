@@ -12,13 +12,13 @@ export class UserEventsSubscriber implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    // Escuchar evento auth.user.created → crear perfil base automáticamente
+    // Escuchar evento auth.user.verified → crear perfil base automáticamente
     await this.eventSubscriber.subscribe(
-      'user-service.auth.user.created',
-      'auth.user.created',
+      'user-service.auth.user.verified',
+      'auth.user.verified',
       async (event) => {
         const { userId, email, role } = event.data;
-        this.logger.log(`Evento recibido: auth.user.created para ${email} [${userId}]`);
+        this.logger.log(`Evento recibido: auth.user.verified para ${email} [${userId}]`);
 
         try {
           await this.usersService.createProfile({
@@ -31,6 +31,60 @@ export class UserEventsSubscriber implements OnModuleInit {
         } catch (error: any) {
           this.logger.error(
             `Error creando perfil para ${userId}: ${error.message}`,
+            error.stack,
+          );
+        }
+      },
+    );
+
+    // Escuchar progreso del perfil de estudiante para actualizar onboarding en user-service
+    await this.eventSubscriber.subscribe(
+      'user-service.student.profile.updated',
+      'student.profile.updated',
+      async (event) => {
+        const { userId, isOnboardingReady } = event.data;
+
+        if (typeof userId !== 'string' || typeof isOnboardingReady !== 'boolean') {
+          this.logger.warn('student.profile.updated recibido sin payload de onboarding válido');
+          return;
+        }
+
+        try {
+          await this.usersService.setOnboardingStatus(userId, isOnboardingReady);
+        } catch (error: any) {
+          if (error.status === 404) {
+            this.logger.warn(`Perfil base no encontrado para ${userId}; onboarding student omitido`);
+            return;
+          }
+          this.logger.error(
+            `Error actualizando onboarding (student) para ${userId}: ${error.message}`,
+            error.stack,
+          );
+        }
+      },
+    );
+
+    // Escuchar progreso del perfil de empresa para actualizar onboarding en user-service
+    await this.eventSubscriber.subscribe(
+      'user-service.company.profile.updated',
+      'company.profile.updated',
+      async (event) => {
+        const { userId, isOnboardingReady } = event.data;
+
+        if (typeof userId !== 'string' || typeof isOnboardingReady !== 'boolean') {
+          this.logger.warn('company.profile.updated recibido sin payload de onboarding válido');
+          return;
+        }
+
+        try {
+          await this.usersService.setOnboardingStatus(userId, isOnboardingReady);
+        } catch (error: any) {
+          if (error.status === 404) {
+            this.logger.warn(`Perfil base no encontrado para ${userId}; onboarding company omitido`);
+            return;
+          }
+          this.logger.error(
+            `Error actualizando onboarding (company) para ${userId}: ${error.message}`,
             error.stack,
           );
         }

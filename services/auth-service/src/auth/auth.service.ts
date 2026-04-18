@@ -21,6 +21,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ResendVerificationEmailDto } from './dto/resend-verification-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -32,6 +33,7 @@ const ACCESS_TOKEN_EXPIRY = '1h';
 const REFRESH_TOKEN_DAYS = 7;
 const VERIFICATION_TOKEN_HOURS = 24;
 const RESET_TOKEN_HOURS = 1;
+const RESEND_VERIFICATION_COOLDOWN_SECONDS = 60;
 
 @Injectable()
 export class AuthService {
@@ -117,6 +119,13 @@ export class AuthService {
     if (!user.isActive) {
       throw new UnauthorizedException('La cuenta está desactivada');
     }
+
+    // TEMP: Mientras no esté habilitado el flujo de envío/verificación de correo,
+    // permitimos login aunque el email no esté verificado.
+    // Restaurar esta validación cuando el flujo de verificación esté operativo.
+    // if (!user.isVerified) {
+    //   throw new UnauthorizedException('Debes verificar tu correo antes de iniciar sesión');
+    // }
 
     // 4. Comparar password
     const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
@@ -268,24 +277,85 @@ export class AuthService {
       throw new BadRequestException('Token de verificación inválido o expirado');
     }
 
+    const user = await this.userRepo.findOne({ where: { id: verificationToken.userId } });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
     // 2. Marcar token como usado
     verificationToken.used = true;
     verificationToken.usedAt = new Date();
     await this.verificationTokenRepo.save(verificationToken);
 
     // 3. Actualizar user.isVerified
-    await this.userRepo.update(verificationToken.userId, { isVerified: true });
+    await this.userRepo.update(user.id, { isVerified: true });
 
     // 4. Publicar evento
     await this.eventPublisher.publish(
       'auth.user.verified',
-      { userId: verificationToken.userId },
+      { userId: user.id, email: user.email, role: user.role },
       'auth-service',
     );
 
-    this.logger.log(`Email verificado: usuario ${verificationToken.userId}`);
+    this.logger.log(`Email verificado: usuario ${user.id}`);
 
     return { message: 'Email verificado exitosamente' };
+  }
+
+  // ─── RESEND VERIFICATION EMAIL ───────────────────────────────────
+  async resendVerificationEmail(dto: ResendVerificationEmailDto): Promise<{ message: string }> {
+    const genericMessage =
+      'Si el email está registrado y pendiente de verificación, recibirás un nuevo enlace';
+
+    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+
+    // No revelar si el usuario existe
+    if (!user || user.isVerified || !user.isActive) {
+      return { message: genericMessage };
+    }
+
+    const latestToken = await this.verificationTokenRepo.findOne({
+      where: {
+        userId: user.id,
+        type: VerificationTokenType.EMAIL_VERIFICATION,
+        used: false,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (latestToken) {
+      const secondsSinceLastToken = Math.floor((Date.now() - latestToken.createdAt.getTime()) / 1000);
+      if (secondsSinceLastToken < RESEND_VERIFICATION_COOLDOWN_SECONDS) {
+        this.logger.warn(
+          `Reenvío de verificación en cooldown para usuario ${user.id}: ${secondsSinceLastToken}s`,
+        );
+        return { message: genericMessage };
+      }
+    }
+
+    await this.verificationTokenRepo.update(
+      {
+        userId: user.id,
+        type: VerificationTokenType.EMAIL_VERIFICATION,
+        used: false,
+      },
+      {
+        used: true,
+        usedAt: new Date(),
+      },
+    );
+
+    const verificationToken = this.verificationTokenRepo.create({
+      userId: user.id,
+      token: uuidv4(),
+      type: VerificationTokenType.EMAIL_VERIFICATION,
+      expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_HOURS * 60 * 60 * 1000),
+    });
+    await this.verificationTokenRepo.save(verificationToken);
+
+    this.logger.log(`Nuevo token de verificación generado para usuario ${user.id}`);
+
+    return { message: genericMessage };
   }
 
   // ─── FORGOT PASSWORD ───────────────────────────────────────────────

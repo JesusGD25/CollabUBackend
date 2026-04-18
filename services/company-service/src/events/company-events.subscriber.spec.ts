@@ -46,8 +46,8 @@ describe('CompanyEventsSubscriber', () => {
   it('debería suscribirse a 3 eventos', () => {
     expect(eventSubscriber.subscribe).toHaveBeenCalledTimes(3);
     expect(eventSubscriber.subscribe).toHaveBeenCalledWith(
-      'company-service.auth.user.created',
-      'auth.user.created',
+      'company-service.auth.user.verified',
+      'auth.user.verified',
       expect.any(Function),
     );
     expect(eventSubscriber.subscribe).toHaveBeenCalledWith(
@@ -63,13 +63,13 @@ describe('CompanyEventsSubscriber', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // auth.user.created
+  // auth.user.verified
   // ═══════════════════════════════════════════════════════════════════
-  describe('auth.user.created', () => {
+  describe('auth.user.verified', () => {
     it('debería crear perfil base cuando el rol es company', async () => {
       companyService.createProfile.mockResolvedValue({});
 
-      await handlers['auth.user.created']({
+      await handlers['auth.user.verified']({
         data: { userId: 'user-uuid-1', role: 'company' },
       });
 
@@ -80,7 +80,7 @@ describe('CompanyEventsSubscriber', () => {
     });
 
     it('debería ignorar si el rol no es company', async () => {
-      await handlers['auth.user.created']({
+      await handlers['auth.user.verified']({
         data: { userId: 'user-uuid-1', role: 'student' },
       });
 
@@ -91,7 +91,7 @@ describe('CompanyEventsSubscriber', () => {
       companyService.createProfile.mockRejectedValue({ status: 409, message: 'Ya existe' });
 
       await expect(
-        handlers['auth.user.created']({
+        handlers['auth.user.verified']({
           data: { userId: 'user-uuid-1', role: 'company' },
         }),
       ).resolves.not.toThrow();
@@ -101,7 +101,7 @@ describe('CompanyEventsSubscriber', () => {
       companyService.createProfile.mockRejectedValue(new Error('DB error'));
 
       await expect(
-        handlers['auth.user.created']({
+        handlers['auth.user.verified']({
           data: { userId: 'user-uuid-1', role: 'company' },
         }),
       ).resolves.not.toThrow();
