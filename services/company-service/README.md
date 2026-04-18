@@ -1,72 +1,108 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Company Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Microservicio de perfiles de empresas para la plataforma Collab-U.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Puerto
+- **3004** (por defecto)
 
-## Description
+## Base de Datos
+- PostgreSQL: `company_db` en puerto `5435`
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Estructura
 
-## Project setup
-
-```bash
-$ npm install
+```
+src/
+├── company/
+│   ├── dto/
+│   │   ├── create-company-profile.dto.ts
+│   │   ├── update-company-profile.dto.ts
+│   │   ├── create-location.dto.ts
+│   │   ├── update-location.dto.ts
+│   │   ├── create-contact.dto.ts
+│   │   ├── update-contact.dto.ts
+│   │   ├── create-business-area.dto.ts
+│   │   ├── company-search-query.dto.ts
+│   │   └── index.ts
+│   ├── entities/
+│   │   ├── company-profile.entity.ts
+│   │   ├── company-location.entity.ts
+│   │   ├── company-contact.entity.ts
+│   │   └── business-area.entity.ts
+│   ├── company.service.ts
+│   ├── company.service.spec.ts
+│   ├── company.controller.ts
+│   ├── company.controller.spec.ts
+│   ├── company-internal.controller.ts
+│   └── company.module.ts
+├── events/
+│   ├── company-events.subscriber.ts
+│   └── company-events.subscriber.spec.ts
+├── config/
+│   └── database.config.ts
+├── health/
+│   └── health.controller.ts
+├── app.module.ts
+└── main.ts
 ```
 
-## Compile and run the project
+## Endpoints
 
+### Públicos (con JWT)
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| POST | `/api/v1/companies/profile` | Crear perfil | COMPANY |
+| GET | `/api/v1/companies/profile` | Obtener perfil propio | COMPANY |
+| GET | `/api/v1/companies/profile/:userId` | Obtener perfil por userId | Autenticado |
+| PATCH | `/api/v1/companies/profile` | Actualizar perfil | COMPANY |
+| GET | `/api/v1/companies/search` | Buscar empresas | Autenticado |
+| GET | `/api/v1/companies/locations` | Obtener ubicaciones | COMPANY |
+| POST | `/api/v1/companies/locations` | Agregar ubicación | COMPANY |
+| PATCH | `/api/v1/companies/locations/:locationId` | Actualizar ubicación | COMPANY |
+| DELETE | `/api/v1/companies/locations/:locationId` | Eliminar ubicación | COMPANY |
+| GET | `/api/v1/companies/contacts` | Obtener contactos | COMPANY |
+| POST | `/api/v1/companies/contacts` | Agregar contacto | COMPANY |
+| PATCH | `/api/v1/companies/contacts/:contactId` | Actualizar contacto | COMPANY |
+| DELETE | `/api/v1/companies/contacts/:contactId` | Eliminar contacto | COMPANY |
+| GET | `/api/v1/companies/business-areas` | Obtener áreas de negocio | COMPANY |
+| POST | `/api/v1/companies/business-areas` | Agregar área de negocio | COMPANY |
+| DELETE | `/api/v1/companies/business-areas/:areaId` | Eliminar área de negocio | COMPANY |
+
+### Internos (sin JWT)
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/internal/companies/:userId/basic-info` | Datos básicos para otros servicios |
+| GET | `/internal/companies/:userId/exists` | Verificar existencia |
+| POST | `/internal/companies/update-rating` | Actualizar rating |
+
+### Health
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+
+## Eventos
+
+### Publica
+- `company.profile.created` — Al crear un perfil
+- `company.profile.updated` — Al actualizar un perfil
+- `company.verification.updated` — Al cambiar estado de verificación
+
+### Suscribe
+- `auth.user.created` (rol=company) → Crea perfil base
+- `admin.company.verified` → Actualiza estado de verificación
+- `auth.user.deactivated` → Desactiva perfil
+
+## Tests
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npx jest --verbose --forceExit
 ```
 
-## Run tests
+**69 tests** en 3 suites:
+- `company.service.spec.ts` — 37 tests
+- `company.controller.spec.ts` — 20 tests
+- `company-events.subscriber.spec.ts` — 12 tests
 
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+## Swagger
+Disponible en: `http://localhost:3004/api/docs`
 
 With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
 
