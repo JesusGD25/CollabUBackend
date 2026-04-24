@@ -4,6 +4,7 @@ import {
   IsEnum,
   IsUrl,
   IsInt,
+  IsUUID,
   Min,
   Max,
   MinLength,
@@ -13,7 +14,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CompanySize } from '../entities/company-profile.entity';
 
 export class CreateCompanyProfileDto {
-  userId: string; // Inyectado por el controller desde el JWT
+  @IsOptional()
+  @IsUUID('4', { message: 'user_id debe ser un UUID v4 válido' })
+  userId?: string; // Inyectado por el controller desde el JWT
 
   @ApiProperty({ example: 'Tech Solutions SAS', minLength: 2, maxLength: 200 })
   @IsString()
