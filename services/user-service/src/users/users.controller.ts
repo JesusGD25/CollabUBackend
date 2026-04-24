@@ -80,7 +80,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Eliminar avatar' })
   @ApiResponse({ status: 200, description: 'Avatar eliminado' })
   async deleteAvatar(@Request() req: any) {
-    return this.usersService.updateProfile(req.user.id, { websiteUrl: undefined } as any);
+    return this.usersService.updateProfile(req.user.id, { avatarUrl: undefined } as any);
   }
 
   @Get('settings')

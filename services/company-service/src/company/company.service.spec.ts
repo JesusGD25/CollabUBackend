@@ -153,7 +153,9 @@ describe('CompanyService', () => {
 
     it('debería crear un perfil de empresa', async () => {
       const profile = createMockProfile();
-      profileRepo.findOne.mockResolvedValueOnce(null);
+      profileRepo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(profile);
       profileRepo.create.mockReturnValue(profile);
       profileRepo.save.mockResolvedValue(profile);
 
@@ -179,7 +181,9 @@ describe('CompanyService', () => {
 
     it('debería calcular profileCompleteness al crear', async () => {
       const profile = createMockProfile();
-      profileRepo.findOne.mockResolvedValueOnce(null);
+      profileRepo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(profile);
       profileRepo.create.mockReturnValue(profile);
       profileRepo.save.mockResolvedValue(profile);
 

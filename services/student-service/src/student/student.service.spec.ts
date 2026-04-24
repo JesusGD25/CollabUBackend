@@ -139,7 +139,9 @@ describe('StudentService', () => {
 
     it('debería crear un perfil de estudiante', async () => {
       const profile = createMockProfile();
-      profileRepo.findOne.mockResolvedValueOnce(null); // no existe
+      profileRepo.findOne
+        .mockResolvedValueOnce(null) // no existe
+        .mockResolvedValueOnce(profile); // getProfile al final
       profileRepo.create.mockReturnValue(profile);
       profileRepo.save.mockResolvedValue(profile);
 
@@ -165,7 +167,9 @@ describe('StudentService', () => {
 
     it('debería calcular profileCompleteness al crear', async () => {
       const profile = createMockProfile();
-      profileRepo.findOne.mockResolvedValueOnce(null);
+      profileRepo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(profile);
       profileRepo.create.mockReturnValue(profile);
       profileRepo.save.mockResolvedValue(profile);
 
@@ -672,7 +676,7 @@ describe('StudentService', () => {
         languages: [],
         interests: [],
       });
-      profileRepo.findOne.mockResolvedValueOnce(null);
+      profileRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(profile);
       profileRepo.create.mockReturnValue(profile);
       profileRepo.save.mockImplementation(async (p: any) => {
         profile.profileCompleteness = p.profileCompleteness;

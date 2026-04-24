@@ -36,6 +36,7 @@ const mockVerificationTokenRepo = () => ({
   findOne: jest.fn(),
   create: jest.fn(),
   save: jest.fn(),
+  update: jest.fn(),
 });
 
 const mockJwtService = () => ({
@@ -51,7 +52,7 @@ function createMockUser(overrides: Partial<User> = {}): User {
     email: 'test@udenar.edu.co',
     passwordHash: '$2b$12$hashedpassword',
     role: UserRole.STUDENT,
-    isVerified: false,
+    isVerified: true,
     isActive: true,
     failedLoginAttempts: 0,
     lockedUntil: null,
@@ -226,6 +227,28 @@ describe('AuthService', () => {
       await expect(service.login(dto)).rejects.toThrow(UnauthorizedException);
     });
 
+    it('debería permitir login si el email no está verificado (temporal)', async () => {
+      const hashedPw = await bcrypt.hash('Password1!', 12);
+      const user = createMockUser({
+        isVerified: false,
+        passwordHash: hashedPw,
+      });
+      userRepo.findOne.mockResolvedValue(user);
+      userRepo.save.mockResolvedValue(user);
+      refreshTokenRepo.create.mockReturnValue({} as RefreshToken);
+      refreshTokenRepo.save.mockResolvedValue({} as RefreshToken);
+
+      await expect(service.login(dto)).resolves.toEqual(
+        expect.objectContaining({
+          accessToken: 'mock-jwt-token',
+          user: expect.objectContaining({
+            id: user.id,
+            isVerified: false,
+          }),
+        }),
+      );
+    });
+
     it('debería resetear intentos fallidos tras login exitoso', async () => {
       const hashedPw = await bcrypt.hash('Password1!', 12);
       const user = createMockUser({
@@ -393,6 +416,7 @@ describe('AuthService', () => {
 
       verificationTokenRepo.findOne.mockResolvedValue(vToken);
       verificationTokenRepo.save.mockResolvedValue(vToken);
+      userRepo.findOne.mockResolvedValue(createMockUser({ id: 'user-uuid-1' }));
       userRepo.update.mockResolvedValue({ affected: 1 } as any);
 
       const result = await service.verifyEmail({ token: 'valid-verification-token' });
@@ -404,7 +428,11 @@ describe('AuthService', () => {
       expect(userRepo.update).toHaveBeenCalledWith('user-uuid-1', { isVerified: true });
       expect(mockEventPublisher.publish).toHaveBeenCalledWith(
         'auth.user.verified',
-        { userId: 'user-uuid-1' },
+        {
+          userId: 'user-uuid-1',
+          email: 'test@udenar.edu.co',
+          role: UserRole.STUDENT,
+        },
         'auth-service',
       );
     });

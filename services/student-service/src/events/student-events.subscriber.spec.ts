@@ -34,14 +34,14 @@ describe('StudentEventsSubscriber', () => {
   });
 
   describe('onModuleInit', () => {
-    it('debería suscribirse a auth.user.created y auth.user.deactivated', async () => {
+    it('debería suscribirse a auth.user.verified y auth.user.deactivated', async () => {
       mockEventSubscriber.subscribe.mockResolvedValue(undefined);
 
       await subscriber.onModuleInit();
 
       expect(mockEventSubscriber.subscribe).toHaveBeenCalledWith(
-        'student-service.auth.user.created',
-        'auth.user.created',
+        'student-service.auth.user.verified',
+        'auth.user.verified',
         expect.any(Function),
       );
       expect(mockEventSubscriber.subscribe).toHaveBeenCalledWith(
@@ -55,7 +55,7 @@ describe('StudentEventsSubscriber', () => {
       let createdHandler!: Function;
       mockEventSubscriber.subscribe.mockImplementation(
         async (_queue: string, pattern: string, handler: Function) => {
-          if (pattern === 'auth.user.created') {
+          if (pattern === 'auth.user.verified') {
             createdHandler = handler;
           }
         },
@@ -77,7 +77,7 @@ describe('StudentEventsSubscriber', () => {
       let createdHandler!: Function;
       mockEventSubscriber.subscribe.mockImplementation(
         async (_queue: string, pattern: string, handler: Function) => {
-          if (pattern === 'auth.user.created') {
+          if (pattern === 'auth.user.verified') {
             createdHandler = handler;
           }
         },
@@ -110,7 +110,7 @@ describe('StudentEventsSubscriber', () => {
     it('debería manejar errores sin propagarlos', async () => {
       mockEventSubscriber.subscribe.mockImplementation(
         async (_q: string, pattern: string, handler: Function) => {
-          if (pattern === 'auth.user.created') {
+          if (pattern === 'auth.user.verified') {
             await handler({ data: { userId: 'err-user', role: 'student' } });
           }
         },
@@ -123,7 +123,7 @@ describe('StudentEventsSubscriber', () => {
     it('debería ignorar ConflictException (409) al crear perfil duplicado', async () => {
       mockEventSubscriber.subscribe.mockImplementation(
         async (_q: string, pattern: string, handler: Function) => {
-          if (pattern === 'auth.user.created') {
+          if (pattern === 'auth.user.verified') {
             await handler({ data: { userId: 'dup-user', role: 'student' } });
           }
         },

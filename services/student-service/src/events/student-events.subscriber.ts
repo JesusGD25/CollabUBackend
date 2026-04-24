@@ -12,19 +12,19 @@ export class StudentEventsSubscriber implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    // Cuando se crea un usuario con rol student → crear perfil base
+    // Cuando se verifica un usuario con rol student → crear perfil base
     await this.eventSubscriber.subscribe(
-      'student-service.auth.user.created',
-      'auth.user.created',
+      'student-service.auth.user.verified',
+      'auth.user.verified',
       async (event) => {
         const { userId, role } = event.data;
 
         if (role !== 'student') {
-          this.logger.debug(`Evento auth.user.created ignorado: rol=${role}`);
+          this.logger.debug(`Evento auth.user.verified ignorado: rol=${role}`);
           return;
         }
 
-        this.logger.log(`Evento recibido: auth.user.created para estudiante ${userId}`);
+        this.logger.log(`Evento recibido: auth.user.verified para estudiante ${userId}`);
 
         try {
           await this.studentService.createProfile({

@@ -80,15 +80,19 @@ export class StudentService {
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
     await this.profileRepo.save(saved);
 
+    const createdProfile = await this.getProfile(saved.userId);
+
     await this.eventPublisher.publish('student.profile.created', {
-      userId: saved.userId,
-      studentId: saved.id,
-      program: saved.program,
-      semester: saved.semester,
+      userId: createdProfile.userId,
+      studentId: createdProfile.id,
+      program: createdProfile.program,
+      semester: createdProfile.semester,
+      profileCompleteness: createdProfile.profileCompleteness,
+      isOnboardingReady: this.isOnboardingReady(createdProfile),
     }, 'student-service');
 
     this.logger.log(`Perfil de estudiante creado: ${saved.id} para usuario ${saved.userId}`);
-    return saved;
+    return createdProfile;
   }
 
   async getProfile(userId: string): Promise<StudentProfile> {
@@ -121,12 +125,10 @@ export class StudentService {
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
     await this.profileRepo.save(saved);
 
-    await this.eventPublisher.publish('student.profile.updated', {
-      userId: saved.userId,
-      studentId: saved.id,
-    }, 'student-service');
+    const updatedProfile = await this.getProfile(userId);
+    await this.publishProfileUpdated(updatedProfile);
 
-    return this.getProfile(userId);
+    return updatedProfile;
   }
 
   async searchStudents(query: StudentSearchQueryDto): Promise<PaginatedStudentsResponseDto> {
@@ -502,6 +504,31 @@ export class StudentService {
     return score;
   }
 
+  private isOnboardingReady(profile: StudentProfile): boolean {
+    const hasProgram = !!profile.program?.trim();
+    const hasSemester = !!profile.semester;
+    const hasBio = !!profile.bio?.trim();
+    const hasSkill = (profile.skills?.length ?? 0) > 0;
+    const hasExperienceOrEducation =
+      (profile.experiences?.length ?? 0) > 0 ||
+      (profile.education?.length ?? 0) > 0;
+
+    return hasProgram && hasSemester && hasBio && hasSkill && hasExperienceOrEducation;
+  }
+
+  private async publishProfileUpdated(profile: StudentProfile): Promise<void> {
+    await this.eventPublisher.publish(
+      'student.profile.updated',
+      {
+        userId: profile.userId,
+        studentId: profile.id,
+        profileCompleteness: profile.profileCompleteness,
+        isOnboardingReady: this.isOnboardingReady(profile),
+      },
+      'student-service',
+    );
+  }
+
   private async recalculateCompleteness(userId: string): Promise<void> {
     const profile = await this.profileRepo.findOne({
       where: { userId },
@@ -510,6 +537,7 @@ export class StudentService {
     if (profile) {
       profile.profileCompleteness = this.calculateProfileCompleteness(profile);
       await this.profileRepo.save(profile);
+      await this.publishProfileUpdated(profile);
     }
   }
 }

@@ -12,6 +12,7 @@ const mockAuthService = {
   logout: jest.fn(),
   logoutAll: jest.fn(),
   verifyEmail: jest.fn(),
+  resendVerificationEmail: jest.fn(),
   forgotPassword: jest.fn(),
   resetPassword: jest.fn(),
   changePassword: jest.fn(),
@@ -133,6 +134,24 @@ describe('AuthController', () => {
       const result = await controller.verifyEmail(dto);
 
       expect(result).toEqual(expected);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // POST /resend-verification-email
+  // ═══════════════════════════════════════════════════════════════════
+  describe('resendVerificationEmail', () => {
+    it('debería procesar la solicitud de reenvío', async () => {
+      const dto = { email: 'test@udenar.edu.co' };
+      const expected = {
+        message: 'Si el email está registrado y pendiente de verificación, recibirás un nuevo enlace',
+      };
+      service.resendVerificationEmail.mockResolvedValue(expected);
+
+      const result = await controller.resendVerificationEmail(dto);
+
+      expect(result).toEqual(expected);
+      expect(service.resendVerificationEmail).toHaveBeenCalledWith(dto);
     });
   });
 

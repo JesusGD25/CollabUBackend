@@ -145,6 +145,52 @@ export class UsersService {
     return result!;
   }
 
+  // ─── SET ONBOARDING STATUS (event-driven) ─────────────────────────
+  async setOnboardingStatus(userId: string, isComplete: boolean): Promise<UserProfile> {
+    const profile = await this.profileRepo.findOne({
+      where: { userId },
+      relations: ['settings'],
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Perfil no encontrado');
+    }
+
+    const recalculatedCompleteness = this.calculateCompleteness(profile);
+    const hasChanges =
+      profile.isOnboardingComplete !== isComplete ||
+      profile.profileCompleteness !== recalculatedCompleteness;
+
+    if (!hasChanges) {
+      return profile;
+    }
+
+    profile.isOnboardingComplete = isComplete;
+    profile.profileCompleteness = recalculatedCompleteness;
+
+    const saved = await this.profileRepo.save(profile);
+
+    await this.logActivity(
+      userId,
+      ActivityType.PROFILE_UPDATED,
+      isComplete ? 'Onboarding completado' : 'Onboarding pendiente',
+    );
+
+    await this.eventPublisher.publish(
+      'user.profile.updated',
+      {
+        userId,
+        profileCompleteness: saved.profileCompleteness,
+        isOnboardingComplete: saved.isOnboardingComplete,
+      },
+      'user-service',
+    );
+
+    this.logger.log(`Estado de onboarding actualizado: ${userId} -> ${isComplete}`);
+
+    return saved;
+  }
+
   // ─── UPDATE SETTINGS ──────────────────────────────────────────────
   async updateSettings(userId: string, dto: UpdateUserSettingsDto): Promise<UserSettings> {
     const settings = await this.settingsRepo.findOne({ where: { userId } });
