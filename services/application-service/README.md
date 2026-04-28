@@ -1,98 +1,186 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Application Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Microservicio de gestión de postulaciones para la plataforma Collab-U. Maneja el ciclo de vida completo de una postulación: desde que un estudiante aplica a un proyecto hasta su finalización, incluyendo entrevistas y entregables.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Puerto
+- **3006** (por defecto)
 
-## Description
+## Base de Datos
+- PostgreSQL: `application_db` en puerto `5435`
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Estructura
 
-## Project setup
-
-```bash
-$ npm install
+```
+src/
+├── application/
+│   ├── dto/
+│   │   ├── create-application.dto.ts
+│   │   ├── update-application-status.dto.ts
+│   │   ├── withdraw-application.dto.ts
+│   │   ├── schedule-interview.dto.ts
+│   │   ├── update-interview.dto.ts         # CompleteInterviewDto, CancelInterviewDto, RescheduleInterviewDto
+│   │   ├── submit-deliverable.dto.ts
+│   │   ├── review-deliverable.dto.ts
+│   │   ├── application-query.dto.ts
+│   │   └── index.ts
+│   ├── entities/
+│   │   ├── application.entity.ts           # Entidad principal (8 estados)
+│   │   ├── application-timeline.entity.ts  # Auditoría de cambios de estado
+│   │   ├── interview.entity.ts             # Entrevistas (4 tipos, 5 estados)
+│   │   └── student-deliverable.entity.ts   # Entregables del estudiante
+│   ├── application.service.ts
+│   ├── application.service.spec.ts
+│   ├── application.controller.ts
+│   ├── application.controller.spec.ts
+│   ├── application-internal.controller.ts
+│   ├── application-events.subscriber.ts
+│   ├── application-events.subscriber.spec.ts
+│   └── application.module.ts
+├── config/
+│   └── database.config.ts
+├── health/
+│   └── health.controller.ts
+├── app.module.ts
+└── main.ts
 ```
 
-## Compile and run the project
+## Entidades
 
-```bash
-# development
-$ npm run start
+### Application
+Postulación de un estudiante a un proyecto. Restricción `UNIQUE(projectId, studentId)`.
 
-# watch mode
-$ npm run start:dev
+| Estado | Descripción |
+|--------|-------------|
+| `pending` | Recién enviada, esperando revisión |
+| `under_review` | La empresa está revisando |
+| `shortlisted` | Preseleccionada para entrevista |
+| `interview` | En proceso de entrevistas |
+| `accepted` | Aceptada — el estudiante puede enviar entregables |
+| `rejected` | Rechazada (requiere razón) |
+| `withdrawn` | Retirada por el estudiante |
+| `completed` | Proyecto finalizado |
 
-# production mode
-$ npm run start:prod
+**Transiciones válidas:**
+```
+pending → under_review | rejected
+under_review → shortlisted | rejected
+shortlisted → interview | rejected
+interview → accepted | rejected
+accepted → completed
 ```
 
-## Run tests
+### ApplicationTimeline
+Registra cada cambio de estado con `fromStatus`, `toStatus`, `changedByUserId`, `comment` y `metadata` (jsonb).
 
-```bash
-# unit tests
-$ npm run test
+### Interview
+Tipos: `phone`, `video`, `in_person`, `technical`.
+Estados: `scheduled`, `completed`, `cancelled`, `rescheduled`, `no_show`.
 
-# e2e tests
-$ npm run test:e2e
+### StudentDeliverable
+Estados: `pending`, `submitted`, `approved`, `rejected`, `needs_revision`.
+Solo se pueden enviar entregables en postulaciones con estado `accepted`.
 
-# test coverage
-$ npm run test:cov
+## Endpoints
+
+### Postulaciones (con JWT)
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| POST | `/api/v1/applications` | Postularse a un proyecto | STUDENT |
+| GET | `/api/v1/applications/my` | Ver mis postulaciones | STUDENT |
+| GET | `/api/v1/applications/:id` | Detalle de una postulación | Autenticado |
+| GET | `/api/v1/applications/:id/timeline` | Historial de cambios de estado | Autenticado |
+| GET | `/api/v1/applications/project/:projectId` | Postulaciones de un proyecto | COMPANY, ADMIN |
+| PATCH | `/api/v1/applications/:id/status` | Cambiar estado (empresa) | COMPANY, ADMIN |
+| PATCH | `/api/v1/applications/:id/withdraw` | Retirar postulación (estudiante) | STUDENT |
+
+### Entrevistas (con JWT)
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| POST | `/api/v1/applications/:id/interviews` | Programar entrevista | COMPANY, ADMIN |
+| GET | `/api/v1/applications/:id/interviews` | Ver entrevistas | Autenticado |
+| PATCH | `/api/v1/applications/:id/interviews/:interviewId/complete` | Completar entrevista | COMPANY, ADMIN |
+| PATCH | `/api/v1/applications/:id/interviews/:interviewId/cancel` | Cancelar entrevista | COMPANY, ADMIN |
+| POST | `/api/v1/applications/:id/interviews/:interviewId/reschedule` | Reagendar entrevista | COMPANY, ADMIN |
+
+### Entregables (con JWT)
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| POST | `/api/v1/applications/:id/deliverables` | Enviar entregable | STUDENT |
+| PATCH | `/api/v1/applications/:id/deliverables/:deliverableId` | Actualizar entregable | STUDENT |
+| GET | `/api/v1/applications/:id/deliverables` | Ver entregables | Autenticado |
+| PATCH | `/api/v1/applications/:id/deliverables/:deliverableId/approve` | Aprobar entregable | COMPANY, ADMIN |
+| PATCH | `/api/v1/applications/:id/deliverables/:deliverableId/reject` | Rechazar entregable | COMPANY, ADMIN |
+| PATCH | `/api/v1/applications/:id/deliverables/:deliverableId/request-revision` | Solicitar revisión | COMPANY, ADMIN |
+
+### Internos (sin JWT — solo para otros microservicios)
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/internal/applications/project/:projectId/count` | Total de postulaciones por proyecto |
+| GET | `/internal/applications/student/:studentId/active-count` | Postulaciones pendientes del estudiante |
+| GET | `/internal/applications/project/:projectId` | Listar postulaciones de un proyecto |
+| POST | `/internal/applications/student/:studentId/withdraw-all` | Retirar todas las postulaciones activas |
+
+### Health
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/health` | Estado del servicio y conexión a DB |
+
+## Eventos
+
+### Publica
+| Evento | Cuándo |
+|--------|--------|
+| `application.created` | Al crear una postulación |
+| `application.status.changed` | Al cambiar cualquier estado (incluyendo retiro) |
+
+### Suscribe
+| Evento | Acción |
+|--------|--------|
+| `auth.user.deactivated` | Retira todas las postulaciones activas del usuario |
+
+## Dependencias externas
+| Servicio | Uso |
+|----------|-----|
+| **Project Service** (`:3005`) | Verificar que el proyecto existe y está publicado; incrementar contador de aplicaciones |
+| **Matching Service** (`:3007`) | Calcular `matchScore` al momento de postular (falla de forma no bloqueante) |
+
+## Variables de entorno
+```env
+PORT=3006
+DB_HOST=localhost
+DB_PORT=5435
+DB_USERNAME=collabu_admin
+DB_PASSWORD=collabu_secret_2025
+DB_NAME=application_db
+PROJECT_SERVICE_URL=http://localhost:3005
+MATCHING_SERVICE_URL=http://localhost:3007
+RABBITMQ_URL=amqp://localhost:5672
+JWT_SECRET=<mismo valor que auth-service>
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Instalación y ejecución
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm install
+
+# desarrollo
+npm run start:dev
+
+# producción
+npm run start:prod
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Tests
 
-## Resources
+```bash
+npx jest --verbose --forceExit
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+**47 tests** en 4 suites:
+- `app.controller.spec.ts` — 1 test
+- `application.service.spec.ts` — 31 tests
+- `application.controller.spec.ts` — 13 tests
+- `application-events.subscriber.spec.ts` — 3 tests
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## Swagger
+Disponible en: `http://localhost:3006/api/docs`

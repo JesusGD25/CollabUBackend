@@ -1,0 +1,33 @@
+export enum ApplicationStatus {
+  PENDING = 'pending',
+  UNDER_REVIEW = 'under_review',
+  SHORTLISTED = 'shortlisted',
+  INTERVIEW = 'interview',
+  ACCEPTED = 'accepted',
+  REJECTED = 'rejected',
+  WITHDRAWN = 'withdrawn',
+  COMPLETED = 'completed',
+}
+
+export enum InterviewType {
+  PHONE = 'phone',
+  VIDEO = 'video',
+  IN_PERSON = 'in_person',
+  TECHNICAL = 'technical',
+}
+
+export enum InterviewStatus {
+  SCHEDULED = 'scheduled',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  RESCHEDULED = 'rescheduled',
+  NO_SHOW = 'no_show',
+}
+
+export enum DeliverableStatus {
+  PENDING = 'pending',
+  SUBMITTED = 'submitted',
+  APPROVED = 'approved',
+  REJECTED = 'rejected',
+  NEEDS_REVISION = 'needs_revision',
+}
