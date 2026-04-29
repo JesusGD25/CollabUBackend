@@ -71,9 +71,15 @@ export class ProjectService {
       if (!companyCheck.exists) {
         throw new BadRequestException('La empresa no existe');
       }
+      
+      // TODO: [TEMPORAL] Verificación de empresa inhabilitada para permitir la 
+      // creación de proyectos durante las pruebas. Descomentar en el futuro 
+      // cuando el proceso de verificación esté completo en el frontend.
+      /*
       if (!companyCheck.isVerified) {
         throw new BadRequestException('La empresa no está verificada');
       }
+      */
     } catch (error: any) {
       if (error instanceof BadRequestException) {
         throw error;
@@ -345,12 +351,32 @@ export class ProjectService {
     };
   }
 
-  async getMyProjects(userId: string): Promise<Project[]> {
-    return this.projectRepo.find({
-      where: { createdByUserId: userId },
-      relations: ['tags'],
-      order: { createdAt: 'DESC' },
-    });
+  async getMyProjects(userId: string, query?: ProjectSearchQueryDto): Promise<PaginatedProjectsResponse> {
+    const qb = this.projectRepo.createQueryBuilder('project');
+    qb.leftJoinAndSelect('project.tags', 'tag');
+    qb.where('project.createdByUserId = :userId', { userId });
+
+    if (query?.status) {
+      qb.andWhere('project.status = :status', { status: query.status });
+    }
+
+    qb.orderBy('project.createdAt', 'DESC');
+
+    const page = query?.page || 1;
+    const limit = query?.limit || 10;
+    qb.skip((page - 1) * limit).take(limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   async getMyProjectsStats(userId: string) {

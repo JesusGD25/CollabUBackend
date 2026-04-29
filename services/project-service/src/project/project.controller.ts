@@ -69,8 +69,8 @@ export class ProjectController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Mis proyectos publicados' })
   @ApiResponse({ status: 200, description: 'Listado de mis proyectos' })
-  async getMyProjects(@CurrentUser() user: any) {
-    return this.projectService.getMyProjects(user.userId);
+  async getMyProjects(@CurrentUser() user: any, @Query() query: ProjectSearchQueryDto) {
+    return this.projectService.getMyProjects(user.userId, query);
   }
 
   @Get('my-projects/stats')
