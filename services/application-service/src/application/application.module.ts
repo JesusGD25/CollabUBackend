@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { HttpModule } from '@nestjs/axios';
+import { HttpModule, HttpService } from '@nestjs/axios';
 import { MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Application } from './entities/application.entity';
@@ -24,7 +24,17 @@ import { EventPublisher } from '@collab-u/shared';
     HttpModule,
   ],
   controllers: [ApplicationController, ApplicationInternalController],
-  providers: [ApplicationService, MicroserviceHttpClient, EventPublisher],
+  providers: [
+    ApplicationService,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => {
+        return new MicroserviceHttpClient(httpService as any);
+      },
+      inject: [HttpService],
+    },
+    EventPublisher,
+  ],
   exports: [ApplicationService],
 })
 export class ApplicationModule {}
