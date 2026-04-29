@@ -178,9 +178,9 @@ npx jest --verbose --forceExit
 
 **47 tests** en 4 suites:
 - `app.controller.spec.ts` — 1 test
-- `application.service.spec.ts` — 31 tests
-- `application.controller.spec.ts` — 13 tests
-- `application-events.subscriber.spec.ts` — 3 tests
+- `application.service.spec.ts` — 26 tests
+- `application.controller.spec.ts` — 16 tests
+- `application-events.subscriber.spec.ts` — 4 tests
 
 ## Swagger
 Disponible en: `http://localhost:3006/api/docs`

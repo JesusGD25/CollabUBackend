@@ -2,11 +2,11 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { GlobalHttpExceptionFilter } from '@collab-u/shared';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Validación global
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -16,19 +16,21 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger
+  app.useGlobalFilters(new GlobalHttpExceptionFilter());
+
   const config = new DocumentBuilder()
     .setTitle('Collab-U Matching Service')
-    .setDescription('API para Matching Service')
+    .setDescription(
+      'Servicio de matching inteligente entre estudiantes y proyectos',
+    )
     .setVersion('1.0')
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  // Puerto
   const port = process.env.PORT || 3007;
   await app.listen(port);
   console.log(`Matching Service corriendo en puerto ${port}`);
 }
-bootstrap();
+void bootstrap();

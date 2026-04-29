@@ -183,6 +183,7 @@ describe('ApplicationService', () => {
       expect(mockEventPublisher.publish).toHaveBeenCalledWith(
         'application.created',
         expect.objectContaining({ projectId: PROJECT_ID, studentId: STUDENT_ID }),
+        'application-service',
       );
     });
 
@@ -249,6 +250,7 @@ describe('ApplicationService', () => {
       expect(mockEventPublisher.publish).toHaveBeenCalledWith(
         'application.status.changed',
         expect.objectContaining({ newStatus: ApplicationStatus.UNDER_REVIEW }),
+        'application-service',
       );
     });
 

@@ -7,9 +7,6 @@ import { GlobalHttpExceptionFilter } from '@collab-u/shared';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Prefijo global
-  app.setGlobalPrefix('api/v1');
-
   // Filtro global de excepciones
   app.useGlobalFilters(new GlobalHttpExceptionFilter());
 

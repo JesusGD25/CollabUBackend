@@ -39,7 +39,7 @@ import { DeliverableStatus } from './entities/student-deliverable.entity';
 @ApiTags('Applications')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Controller('applications')
+@Controller('api/v1/applications')
 export class ApplicationController {
   constructor(private readonly applicationService: ApplicationService) {}
 
