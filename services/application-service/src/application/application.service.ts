@@ -7,7 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindOptionsWhere } from 'typeorm';
+import { Repository, FindOptionsWhere, In } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -172,6 +172,41 @@ export class ApplicationService {
     const { page = 1, limit = 20, status } = query;
 
     const where: FindOptionsWhere<Application> = { studentId };
+    if (status) where.status = status;
+
+    const [data, total] = await this.applicationRepo.findAndCount({
+      where,
+      relations: ['interviews', 'deliverables'],
+      order: { appliedAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getReceivedApplications(
+    companyId: string,
+    query: ApplicationQueryDto,
+  ): Promise<PaginatedApplicationsResponse> {
+    const { page = 1, limit = 20, status } = query;
+
+    let projectIds: string[] = [];
+    try {
+      projectIds = await this.httpClient.get<string[]>(
+        'project',
+        `/internal/projects/company/${companyId}`,
+      );
+    } catch (err) {
+      this.logger.error(`Error obteniendo proyectos de la empresa ${companyId}: ${err.message}`);
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+
+    if (!projectIds || projectIds.length === 0) {
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+
+    const where: FindOptionsWhere<Application> = { projectId: In(projectIds) };
     if (status) where.status = status;
 
     const [data, total] = await this.applicationRepo.findAndCount({
@@ -559,6 +594,15 @@ export class ApplicationService {
 
   async countByProject(projectId: string): Promise<number> {
     return this.applicationRepo.count({ where: { projectId } });
+  }
+
+  /** Retorna todos los projectIds a los que el estudiante ha aplicado (cualquier estado) */
+  async getAppliedProjectIds(studentId: string): Promise<string[]> {
+    const apps = await this.applicationRepo.find({
+      where: { studentId },
+      select: ['projectId'],
+    });
+    return apps.map((a) => a.projectId);
   }
 
   /** Llamado por el subscriber de auth.user.deactivated */

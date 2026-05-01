@@ -59,8 +59,9 @@ export class ProjectController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Listar/buscar proyectos' })
   @ApiResponse({ status: 200, description: 'Listado de proyectos' })
-  async searchProjects(@Query() query: ProjectSearchQueryDto) {
-    return this.projectService.searchProjects(query);
+  async searchProjects(@CurrentUser() user: any, @Query() query: ProjectSearchQueryDto) {
+    const studentId = user?.role === UserRole.STUDENT ? user.userId : undefined;
+    return this.projectService.searchProjects(query, studentId);
   }
 
   @Get('my-projects')

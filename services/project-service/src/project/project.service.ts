@@ -277,11 +277,33 @@ export class ProjectService {
     this.logger.log(`Proyecto eliminado: ${projectId}`);
   }
 
-  async searchProjects(query: ProjectSearchQueryDto): Promise<PaginatedProjectsResponse> {
+  async searchProjects(query: ProjectSearchQueryDto, studentId?: string): Promise<PaginatedProjectsResponse> {
     const qb = this.projectRepo.createQueryBuilder('project');
     qb.leftJoinAndSelect('project.tags', 'tag');
     qb.leftJoinAndSelect('project.requirements', 'req');
     qb.where('project.isActive = :active', { active: true });
+
+    // Si es estudiante: forzar status=published e ignorar cualquier status query param
+    if (studentId) {
+      qb.andWhere('project.status = :status', { status: ProjectStatus.PUBLISHED });
+
+      // Excluir proyectos a los que el estudiante ya aplicó
+      let appliedProjectIds: string[] = [];
+      try {
+        appliedProjectIds = await this.httpClient.get<string[]>(
+          'application',
+          `/internal/applications/student/${studentId}/project-ids`,
+        );
+      } catch (err) {
+        this.logger.warn(`No se pudo obtener proyectos aplicados del estudiante ${studentId}: ${err.message}`);
+      }
+
+      if (appliedProjectIds && appliedProjectIds.length > 0) {
+        qb.andWhere('project.id NOT IN (:...appliedIds)', { appliedIds: appliedProjectIds });
+      }
+    } else if (query.status) {
+      qb.andWhere('project.status = :status', { status: query.status });
+    }
 
     if (query.search) {
       qb.andWhere(
@@ -292,10 +314,6 @@ export class ProjectService {
 
     if (query.projectType) {
       qb.andWhere('project.projectType = :projectType', { projectType: query.projectType });
-    }
-
-    if (query.status) {
-      qb.andWhere('project.status = :status', { status: query.status });
     }
 
     if (query.locationType) {
@@ -646,6 +664,14 @@ export class ProjectService {
   }
 
   // ── UTILIDADES ──
+
+  async getProjectIdsByCompany(companyId: string): Promise<string[]> {
+    const projects = await this.projectRepo.find({
+      where: { companyId },
+      select: ['id'],
+    });
+    return projects.map((p) => p.id);
+  }
 
   private verifyOwnership(project: Project, userId: string): void {
     if (project.createdByUserId !== userId) {

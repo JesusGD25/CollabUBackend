@@ -21,6 +21,12 @@ export class ApplicationInternalController {
     return { studentId, count };
   }
 
+  @Get('student/:studentId/project-ids')
+  async getAppliedProjectIds(@Param('studentId', ParseUUIDPipe) studentId: string) {
+    const projectIds = await this.applicationService.getAppliedProjectIds(studentId);
+    return projectIds;
+  }
+
   @Get('project/:projectId')
   getProjectApplications(
     @Param('projectId', ParseUUIDPipe) projectId: string,
