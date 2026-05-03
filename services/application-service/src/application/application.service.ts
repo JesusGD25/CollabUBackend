@@ -30,9 +30,15 @@ import {
 
 /** Transiciones de estado permitidas para la empresa */
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
-  [ApplicationStatus.PENDING]: [ApplicationStatus.UNDER_REVIEW, ApplicationStatus.REJECTED],
+  [ApplicationStatus.PENDING]: [
+    ApplicationStatus.UNDER_REVIEW,
+    ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.INTERVIEW,
+    ApplicationStatus.REJECTED,
+  ],
   [ApplicationStatus.UNDER_REVIEW]: [
     ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.INTERVIEW,
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.SHORTLISTED]: [
@@ -400,11 +406,13 @@ export class ApplicationService {
     const application = await this.findApplicationById(applicationId);
 
     if (
+      application.status !== ApplicationStatus.PENDING &&
+      application.status !== ApplicationStatus.UNDER_REVIEW &&
       application.status !== ApplicationStatus.SHORTLISTED &&
       application.status !== ApplicationStatus.INTERVIEW
     ) {
       throw new BadRequestException(
-        'Solo se pueden programar entrevistas para postulaciones en estado "shortlisted" o "interview"',
+        'Solo se pueden programar entrevistas para postulaciones en estado "pending", "under_review", "shortlisted" o "interview"',
       );
     }
 
@@ -421,7 +429,11 @@ export class ApplicationService {
     const saved = await this.interviewRepo.save(interview);
 
     // Mover a estado "interview" si aún no está
-    if (application.status === ApplicationStatus.SHORTLISTED) {
+    if (
+      application.status === ApplicationStatus.PENDING ||
+      application.status === ApplicationStatus.UNDER_REVIEW ||
+      application.status === ApplicationStatus.SHORTLISTED
+    ) {
       await this.updateStatus(applicationId, companyUserId, {
         status: ApplicationStatus.INTERVIEW,
         comment: 'Entrevista programada',
