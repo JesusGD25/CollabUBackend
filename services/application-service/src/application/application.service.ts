@@ -7,7 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindOptionsWhere, In } from 'typeorm';
+import { Repository, FindOptionsWhere, In, MoreThanOrEqual } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -169,7 +169,7 @@ export class ApplicationService {
     studentId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, sortBy = 'appliedAt', sortDir = 'DESC' } = query;
 
     const where: FindOptionsWhere<Application> = { studentId };
     if (status) where.status = status;
@@ -177,7 +177,7 @@ export class ApplicationService {
     const [data, total] = await this.applicationRepo.findAndCount({
       where,
       relations: ['interviews', 'deliverables'],
-      order: { appliedAt: 'DESC' },
+      order: { [sortBy]: sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -189,7 +189,7 @@ export class ApplicationService {
     companyId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, minMatchScore, sortBy = 'appliedAt', sortDir = 'DESC' } = query;
 
     let projectIds: string[] = [];
     try {
@@ -208,11 +208,14 @@ export class ApplicationService {
 
     const where: FindOptionsWhere<Application> = { projectId: In(projectIds) };
     if (status) where.status = status;
+    if (minMatchScore !== undefined) {
+      where.matchScore = MoreThanOrEqual(minMatchScore);
+    }
 
     const [data, total] = await this.applicationRepo.findAndCount({
       where,
       relations: ['interviews', 'deliverables'],
-      order: { appliedAt: 'DESC' },
+      order: { [sortBy]: sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -225,15 +228,26 @@ export class ApplicationService {
     companyUserId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, minMatchScore, sortBy, sortDir = 'DESC' } = query;
 
     const where: FindOptionsWhere<Application> = { projectId };
     if (status) where.status = status;
+    if (minMatchScore !== undefined) {
+      where.matchScore = MoreThanOrEqual(minMatchScore);
+    }
+
+    const order: any = {};
+    if (sortBy) {
+      order[sortBy] = sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    } else {
+      order.matchScore = 'DESC';
+      order.appliedAt = 'DESC';
+    }
 
     const [data, total] = await this.applicationRepo.findAndCount({
       where,
       relations: ['interviews', 'deliverables'],
-      order: { matchScore: 'DESC', appliedAt: 'DESC' },
+      order,
       skip: (page - 1) * limit,
       take: limit,
     });

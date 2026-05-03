@@ -27,4 +27,20 @@ export class ApplicationQueryDto {
   @IsInt()
   @Min(1)
   limit?: number = 20;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sortBy?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  sortDir?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  minMatchScore?: number;
 }
