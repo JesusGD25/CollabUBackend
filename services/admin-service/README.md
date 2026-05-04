@@ -1,6 +1,114 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Admin Service
+
+Microservicio administrativo de **Collab-U**. Gestiona períodos y programas académicos, verificación de empresas, supervisores académicos y configuraciones del sistema.
+
+## Información General
+
+- **Puerto**: `3011`
+- **Base de datos**: `admin_db` (PostgreSQL, puerto 5435)
+- **Prefijo API pública**: `api/v1/admin`
+
+## Endpoints
+
+### Públicos (`api/v1/admin`) — requieren JWT
+
+#### Dashboard
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| `GET` | `/dashboard` | Estadísticas administrativas | ADMIN, FACULTY |
+
+#### Períodos Académicos
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| `GET` | `/periods` | Listar períodos (filtrable por status/isCurrent) | Todos |
+| `POST` | `/periods` | Crear período | ADMIN |
+| `GET` | `/periods/:id` | Detalle de un período | Todos |
+| `PUT` | `/periods/:id` | Actualizar período | ADMIN |
+
+#### Programas Académicos
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| `GET` | `/programs` | Listar programas | Todos |
+| `POST` | `/programs` | Crear programa | ADMIN |
+| `GET` | `/programs/:id` | Detalle de un programa | Todos |
+| `PUT` | `/programs/:id` | Actualizar programa | ADMIN |
+
+#### Verificación de Empresas
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| `GET` | `/companies/verifications` | Historial de verificaciones | ADMIN, FACULTY |
+| `PUT` | `/companies/:companyId/verify` | Verificar empresa | ADMIN, FACULTY |
+
+#### Supervisores
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| `GET` | `/supervisors` | Listar supervisores | ADMIN, FACULTY |
+| `POST` | `/supervisors` | Registrar supervisor | ADMIN |
+| `POST` | `/supervisors/assign` | Asignar supervisor a estudiante/proyecto | ADMIN, FACULTY |
+| `GET` | `/supervisors/my-students` | Mis estudiantes supervisados | FACULTY |
+
+#### Configuraciones del Sistema
+| Método | Ruta | Descripción | Rol |
+|--------|------|-------------|-----|
+| `GET` | `/settings` | Listar configuraciones | ADMIN |
+| `PUT` | `/settings` | Crear o actualizar configuración (upsert) | ADMIN |
+| `GET` | `/settings/:key` | Obtener configuración por clave | ADMIN |
+
+### Health
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/health` | Estado del servicio |
+
+## Entidades
+
+### `academic_periods`
+Períodos académicos (ej. `2025-A`). Restricción `UNIQUE(name)`. Sólo un período puede tener `isCurrent=true` a la vez (se gestiona automáticamente en `updatePeriod`). Estados: `planning`, `active`, `closed`, `archived`.
+
+### `academic_programs`
+Programas académicos (ej. `ISC`). Restricción `UNIQUE(code)`. Campos clave: `name`, `code`, `faculty`, `requiresInternship`, `minimumSemesterForInternship`.
+
+### `company_verifications`
+Registro histórico de acciones de verificación sobre empresas. Acciones: `approved`, `rejected`, `suspended`, `reactivated`. Almacena `documentsReviewed` como JSONB.
+
+### `supervisors`
+Perfiles de supervisores académicos vinculados a un `userId`. Restricciones `UNIQUE(user_id)` y `UNIQUE(employee_code)`. Roles: `academic_director`, `internship_coordinator`, `thesis_advisor`, `faculty_supervisor`. Controla `currentStudents` vs `maxStudents`.
+
+### `supervisor_assignments`
+Asignaciones de supervisor a estudiante/proyecto. Restricción `UNIQUE(student_id, project_id)`. Incrementa `currentStudents` del supervisor al asignar.
+
+### `system_settings`
+Configuraciones clave-valor en formato JSONB. Restricción `UNIQUE(key)`. Soporta categorías para agrupar.
+
+## Enums
+
+- **PeriodStatus**: `planning`, `active`, `closed`, `archived`
+- **VerificationAction**: `approved`, `rejected`, `suspended`, `reactivated`
+- **SupervisorRole**: `academic_director`, `internship_coordinator`, `thesis_advisor`, `faculty_supervisor`
+
+## Eventos RabbitMQ Publicados
+
+| Evento | Cuándo |
+|--------|--------|
+| `admin.period.created` | Al crear un período académico |
+| `admin.company.verified` | Al verificar una empresa |
+| `admin.supervisor.assigned` | Al asignar un supervisor |
+
+## Tests
+
+```bash
+npx jest --verbose --forceExit
+```
+
+**42 tests — 42 passing**
+
+- `admin.service.spec.ts` — 26 tests
+- `admin.controller.spec.ts` — 15 tests
+- `app.controller.spec.ts` — 1 test
+
+## Swagger
+
+Disponible en: `http://localhost:3011/api/docs`
 
 [circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
 [circleci-url]: https://circleci.com/gh/nestjs/nest
