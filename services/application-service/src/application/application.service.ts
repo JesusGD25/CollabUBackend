@@ -46,10 +46,19 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.INTERVIEW]: [ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED],
-  [ApplicationStatus.ACCEPTED]: [ApplicationStatus.COMPLETED],
+  [ApplicationStatus.ACCEPTED]: [
+    ApplicationStatus.IN_PROGRESS,
+    ApplicationStatus.COMPLETED,
+    ApplicationStatus.CANCELLED,
+  ],
+  [ApplicationStatus.IN_PROGRESS]: [
+    ApplicationStatus.COMPLETED,
+    ApplicationStatus.CANCELLED,
+  ],
   [ApplicationStatus.REJECTED]: [],
   [ApplicationStatus.WITHDRAWN]: [],
   [ApplicationStatus.COMPLETED]: [],
+  [ApplicationStatus.CANCELLED]: [],
 };
 
 export interface PaginatedApplicationsResponse {

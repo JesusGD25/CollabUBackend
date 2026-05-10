@@ -6,7 +6,9 @@ export enum ApplicationStatus {
   ACCEPTED = 'accepted',
   REJECTED = 'rejected',
   WITHDRAWN = 'withdrawn',
+  IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
 }
 
 export enum InterviewType {
