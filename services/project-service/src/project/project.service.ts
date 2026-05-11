@@ -96,6 +96,7 @@ export class ProjectService {
       projectType: dto.projectType,
       durationMonths: dto.durationMonths,
       startDate: dto.startDate ? new Date(dto.startDate) : undefined,
+      endDate: dto.endDate ? new Date(dto.endDate) : undefined,
       locationType: dto.locationType,
       location: dto.location,
       compensationType: dto.compensationType,
