@@ -325,16 +325,16 @@ export class MatchingService {
     const qb = this.recommendationRepo
       .createQueryBuilder('rec')
       .leftJoinAndSelect('rec.matchResult', 'mr')
-      .where('rec.target_user_id = :userId', { userId })
-      .andWhere('rec.target_type = :targetType', { targetType })
-      .andWhere('rec.is_dismissed = false');
+      .where('rec.targetUserId = :userId', { userId })
+      .andWhere('rec.targetType = :targetType', { targetType })
+      .andWhere('rec.isDismissed = false');
 
     if (query.unseenOnly) {
-      qb.andWhere('rec.is_seen = false');
+      qb.andWhere('rec.isSeen = false');
     }
 
     const [data, total] = await qb
-      .orderBy('rec.created_at', 'DESC')
+      .orderBy('rec.createdAt', 'DESC')
       .skip(((query.page ?? 1) - 1) * (query.limit ?? 20))
       .take(query.limit ?? 20)
       .getManyAndCount();

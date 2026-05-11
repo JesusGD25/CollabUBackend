@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   ParseUUIDPipe,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -83,6 +84,29 @@ export class MatchingController {
       studentId,
       projectId,
     );
+  }
+
+  @Get('projects/:projectId/my-match')
+  @Roles(UserRole.STUDENT)
+  @ApiOperation({
+    summary: 'Ver resultado de matching específico para el estudiante actual y un proyecto',
+  })
+  @ApiResponse({ status: 200 })
+  async getMyMatch(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @CurrentUser() user: { userId: string },
+  ) {
+    try {
+      return await this.matchingService.getResultByStudentAndProject(
+        user.userId,
+        projectId,
+      );
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   @Post('calculate')
