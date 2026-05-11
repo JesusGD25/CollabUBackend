@@ -71,9 +71,15 @@ export class ProjectService {
       if (!companyCheck.exists) {
         throw new BadRequestException('La empresa no existe');
       }
+      
+      // TODO: [TEMPORAL] Verificación de empresa inhabilitada para permitir la 
+      // creación de proyectos durante las pruebas. Descomentar en el futuro 
+      // cuando el proceso de verificación esté completo en el frontend.
+      /*
       if (!companyCheck.isVerified) {
         throw new BadRequestException('La empresa no está verificada');
       }
+      */
     } catch (error: any) {
       if (error instanceof BadRequestException) {
         throw error;
@@ -90,6 +96,7 @@ export class ProjectService {
       projectType: dto.projectType,
       durationMonths: dto.durationMonths,
       startDate: dto.startDate ? new Date(dto.startDate) : undefined,
+      endDate: dto.endDate ? new Date(dto.endDate) : undefined,
       locationType: dto.locationType,
       location: dto.location,
       compensationType: dto.compensationType,
@@ -271,11 +278,33 @@ export class ProjectService {
     this.logger.log(`Proyecto eliminado: ${projectId}`);
   }
 
-  async searchProjects(query: ProjectSearchQueryDto): Promise<PaginatedProjectsResponse> {
+  async searchProjects(query: ProjectSearchQueryDto, studentId?: string): Promise<PaginatedProjectsResponse> {
     const qb = this.projectRepo.createQueryBuilder('project');
     qb.leftJoinAndSelect('project.tags', 'tag');
     qb.leftJoinAndSelect('project.requirements', 'req');
     qb.where('project.isActive = :active', { active: true });
+
+    // Si es estudiante: forzar status=published e ignorar cualquier status query param
+    if (studentId) {
+      qb.andWhere('project.status = :status', { status: ProjectStatus.PUBLISHED });
+
+      // Excluir proyectos a los que el estudiante ya aplicó
+      let appliedProjectIds: string[] = [];
+      try {
+        appliedProjectIds = await this.httpClient.get<string[]>(
+          'application',
+          `/internal/applications/student/${studentId}/project-ids`,
+        );
+      } catch (err) {
+        this.logger.warn(`No se pudo obtener proyectos aplicados del estudiante ${studentId}: ${err.message}`);
+      }
+
+      if (appliedProjectIds && appliedProjectIds.length > 0) {
+        qb.andWhere('project.id NOT IN (:...appliedIds)', { appliedIds: appliedProjectIds });
+      }
+    } else if (query.status) {
+      qb.andWhere('project.status = :status', { status: query.status });
+    }
 
     if (query.search) {
       qb.andWhere(
@@ -286,10 +315,6 @@ export class ProjectService {
 
     if (query.projectType) {
       qb.andWhere('project.projectType = :projectType', { projectType: query.projectType });
-    }
-
-    if (query.status) {
-      qb.andWhere('project.status = :status', { status: query.status });
     }
 
     if (query.locationType) {
@@ -345,12 +370,32 @@ export class ProjectService {
     };
   }
 
-  async getMyProjects(userId: string): Promise<Project[]> {
-    return this.projectRepo.find({
-      where: { createdByUserId: userId },
-      relations: ['tags'],
-      order: { createdAt: 'DESC' },
-    });
+  async getMyProjects(userId: string, query?: ProjectSearchQueryDto): Promise<PaginatedProjectsResponse> {
+    const qb = this.projectRepo.createQueryBuilder('project');
+    qb.leftJoinAndSelect('project.tags', 'tag');
+    qb.where('project.createdByUserId = :userId', { userId });
+
+    if (query?.status) {
+      qb.andWhere('project.status = :status', { status: query.status });
+    }
+
+    qb.orderBy('project.createdAt', 'DESC');
+
+    const page = query?.page || 1;
+    const limit = query?.limit || 10;
+    qb.skip((page - 1) * limit).take(limit);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   async getMyProjectsStats(userId: string) {
@@ -620,6 +665,14 @@ export class ProjectService {
   }
 
   // ── UTILIDADES ──
+
+  async getProjectIdsByCompany(companyId: string): Promise<string[]> {
+    const projects = await this.projectRepo.find({
+      where: { companyId },
+      select: ['id'],
+    });
+    return projects.map((p) => p.id);
+  }
 
   private verifyOwnership(project: Project, userId: string): void {
     if (project.createdByUserId !== userId) {

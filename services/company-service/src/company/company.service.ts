@@ -367,6 +367,7 @@ export class CompanyService {
 
   private isOnboardingReady(profile: CompanyProfile): boolean {
     const hasCompanyName = !!profile.companyName?.trim();
+    const hasNit = !!profile.nit?.trim();
     const hasIndustry = !!profile.industry?.trim();
     const hasDescription = !!profile.description?.trim();
     const hasHeadquarters = !!profile.headquartersCity?.trim();
@@ -375,6 +376,7 @@ export class CompanyService {
 
     return (
       hasCompanyName &&
+      hasNit &&
       hasIndustry &&
       hasDescription &&
       hasHeadquarters &&

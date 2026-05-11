@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { HttpModule } from '@nestjs/axios';
+import { HttpModule, HttpService } from '@nestjs/axios';
 import { MatchWeight } from './entities/match-weight.entity';
 import { MatchResult } from './entities/match-result.entity';
 import { MatchRecommendation } from './entities/match-recommendation.entity';
@@ -16,7 +16,17 @@ import { MicroserviceHttpClient, EventPublisher } from '@collab-u/shared';
     HttpModule,
   ],
   controllers: [MatchingController, MatchingInternalController],
-  providers: [MatchingService, MicroserviceHttpClient, EventPublisher],
+  providers: [
+    MatchingService,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => {
+        return new MicroserviceHttpClient(httpService as any);
+      },
+      inject: [HttpService],
+    },
+    EventPublisher,
+  ],
   exports: [MatchingService],
 })
-export class MatchingModule {}
+export class MatchingModule { }

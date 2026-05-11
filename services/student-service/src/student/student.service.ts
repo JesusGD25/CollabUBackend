@@ -507,13 +507,14 @@ export class StudentService {
   private isOnboardingReady(profile: StudentProfile): boolean {
     const hasProgram = !!profile.program?.trim();
     const hasSemester = !!profile.semester;
+    const hasStudentCode = !!profile.studentCode?.trim();
     const hasBio = !!profile.bio?.trim();
     const hasSkill = (profile.skills?.length ?? 0) > 0;
     const hasExperienceOrEducation =
       (profile.experiences?.length ?? 0) > 0 ||
       (profile.education?.length ?? 0) > 0;
 
-    return hasProgram && hasSemester && hasBio && hasSkill && hasExperienceOrEducation;
+    return hasProgram && hasSemester && hasStudentCode && hasBio && hasSkill && hasExperienceOrEducation;
   }
 
   private async publishProfileUpdated(profile: StudentProfile): Promise<void> {

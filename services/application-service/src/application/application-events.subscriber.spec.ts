@@ -45,7 +45,7 @@ describe('ApplicationEventsSubscriber', () => {
     });
 
     it('debería llamar withdrawAllByStudent cuando recibe el evento', async () => {
-      let capturedHandler: (data: any) => Promise<void>;
+      let capturedHandler: (data: any) => Promise<void> = async () => {};
 
       mockEventSubscriber.subscribe.mockImplementation(
         (_queue: string, _routing: string, handler: (data: any) => Promise<void>) => {
@@ -67,7 +67,7 @@ describe('ApplicationEventsSubscriber', () => {
     });
 
     it('debería no lanzar error si withdrawAllByStudent falla', async () => {
-      let capturedHandler: (data: any) => Promise<void>;
+      let capturedHandler: (data: any) => Promise<void> = async () => {};
 
       mockEventSubscriber.subscribe.mockImplementation(
         (_queue: string, _routing: string, handler: (data: any) => Promise<void>) => {
