@@ -117,16 +117,20 @@ Get-ChildItem -Path "Backend/services" -Directory | ForEach-Object {
 
 En desarrollo, la infraestructura (PostgreSQL, RabbitMQ, Redis) corre en Docker, y los servicios NestJS corren directamente con Node.js para hot-reload.
 
-### Paso 1: Levantar infraestructura
+---
 
-```bash
-cd Backend/docker
+### Paso 1 — Levantar infraestructura Docker
+
+Abre una terminal en `Backend/docker` y ejecuta:
+
+```powershell
+cd C:\...\CollabU\Backend\docker
 docker compose up -d
 ```
 
-Verificar que los 3 contenedores estén healthy:
+Espera a que los 3 contenedores estén **healthy** (~20-30 segundos):
 
-```bash
+```powershell
 docker compose ps
 ```
 
@@ -134,51 +138,129 @@ Resultado esperado:
 
 ```
 NAME                STATUS              PORTS
-collab-u-postgres   Up (healthy)        0.0.0.0:5432->5432/tcp
+collab-u-postgres   Up (healthy)        0.0.0.0:5435->5432/tcp
 collab-u-rabbitmq   Up (healthy)        0.0.0.0:5672->5672/tcp, 0.0.0.0:15672->15672/tcp
 collab-u-redis      Up (healthy)        0.0.0.0:6379->6379/tcp
 ```
 
-### Paso 2: Ejecutar un servicio en modo watch
+> Si algún contenedor aparece como `starting` en lugar de `healthy`, espera unos segundos más y vuelve a ejecutar `docker compose ps`.
 
-Abre una terminal por cada servicio que necesites:
+---
 
-```bash
-cd Backend/services/auth-service
-npm run start:dev
-```
-
-Esto levanta el servicio con hot-reload (reinicio automático al guardar cambios).
-
-### Paso 3: Ejecutar múltiples servicios (PowerShell)
-
-Para levantar varios servicios a la vez, usa terminales separadas o este script:
+### Paso 2 — Compilar la librería compartida
 
 ```powershell
-# Levantar servicios específicos en paralelo
-$servicios = @("api-gateway", "auth-service", "user-service")
+cd C:\...\CollabU\Backend\shared
+npm install
+npm run build
+```
+
+Esto genera `shared/dist/` con los módulos que usan todos los servicios. **Solo es necesario hacerlo una vez**, o cuando se modifique código en `shared/src/`.
+
+---
+
+### Paso 3 — Instalar dependencias de todos los servicios
+
+Ejecuta este script desde la raíz del Backend para instalar `node_modules` en los 13 servicios de una sola vez:
+
+```powershell
+# Ejecutar desde: C:\...\CollabU\Backend
+$servicios = @(
+    "auth-service",
+    "user-service",
+    "api-gateway",
+    "student-service",
+    "company-service",
+    "project-service",
+    "application-service",
+    "matching-service",
+    "evaluation-service",
+    "notification-service",
+    "chat-service",
+    "admin-service",
+    "storage-service"
+)
 
 foreach ($svc in $servicios) {
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd Backend\services\$svc; npm run start:dev"
+    Write-Host "Instalando dependencias: $svc" -ForegroundColor Cyan
+    Push-Location "services\$svc"
+    npm install
+    Pop-Location
+}
+
+Write-Host "Todas las dependencias instaladas." -ForegroundColor Green
+```
+
+> Este paso solo es necesario la primera vez o cuando cambies el `package.json` de algún servicio.
+
+---
+
+### Paso 4 — Levantar todos los servicios en modo desarrollo
+
+Abre **una nueva ventana de PowerShell** en `Backend/` y ejecuta:
+
+```powershell
+# Ejecutar desde: C:\...\CollabU\Backend
+$servicios = @(
+    "auth-service",
+    "user-service",
+    "api-gateway",
+    "student-service",
+    "company-service",
+    "project-service",
+    "application-service",
+    "matching-service",
+    "evaluation-service",
+    "notification-service",
+    "chat-service",
+    "admin-service",
+    "storage-service"
+)
+
+foreach ($svc in $servicios) {
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PWD\services\$svc'; npm run start:dev"
 }
 ```
 
-### Verificaciones rápidas en desarrollo
+Esto abre **13 ventanas de PowerShell**, una por servicio, cada una con hot-reload activo.
 
-```bash
+> **Nota:** analytics-service (puerto 3012) aún no está implementado.
+
+---
+
+### Paso 5 — Verificar que todo funciona
+
+```powershell
 # PostgreSQL — Listar bases de datos
 docker exec collab-u-postgres psql -U collabu_admin -l
 
 # RabbitMQ — Management UI
-# Abrir en navegador: http://localhost:15672
-# Usuario: admin | Contraseña: admin
+# http://localhost:15672  |  Usuario: admin  |  Contraseña: admin
 
 # Redis — Ping
 docker exec collab-u-redis redis-cli -a redis_secret_2025 ping
 # Respuesta esperada: PONG
+```
 
-# Swagger de un servicio (ejemplo auth-service en puerto 3001)
-# Abrir en navegador: http://localhost:3001/api/docs
+Luego verifica los Swagger de los servicios clave:
+
+| Servicio | URL Swagger |
+|----------|-------------|
+| API Gateway | http://localhost:3000/api/docs |
+| Auth Service | http://localhost:3001/api/docs |
+| User Service | http://localhost:3002/api/docs |
+| Student Service | http://localhost:3003/api/docs |
+| Company Service | http://localhost:3004/api/docs |
+
+---
+
+### Levantar solo un servicio específico
+
+Si solo necesitas trabajar con un servicio:
+
+```powershell
+cd C:\...\CollabU\Backend\services\auth-service
+npm run start:dev
 ```
 
 ### Detener infraestructura
@@ -317,7 +399,7 @@ node dist/main
 
 | Servicio | Puerto | Acceso |
 |----------|--------|--------|
-| PostgreSQL | 5432 | `psql -h localhost -U collabu_admin -d auth_db` |
+| PostgreSQL | 5435 | `psql -h localhost -p 5435 -U collabu_admin -d auth_db` |
 | RabbitMQ (AMQP) | 5672 | Conexión interna de servicios |
 | RabbitMQ (Management) | 15672 | `http://localhost:15672` (admin/admin) |
 | Redis | 6379 | `redis-cli -h localhost -a redis_secret_2025` |

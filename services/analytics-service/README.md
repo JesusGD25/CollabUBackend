@@ -1,98 +1,133 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Analytics Service — Collab-U
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Microservicio de métricas, tendencias y reportes de la plataforma Collab-U.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+- **Puerto:** `3012`
+- **Base de datos:** `analytics_db` (PostgreSQL)
+- **Swagger:** `http://localhost:3012/api/docs`
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Responsabilidades
 
-## Project setup
+- Almacenar snapshots diarios de métricas por proyecto, estudiante, empresa y plataforma
+- Analizar tendencias de demanda/oferta de skills (gap analysis)
+- Generar reportes analíticos bajo demanda
+- Exponer dashboard institucional para admins y faculty
 
-```bash
-$ npm install
+---
+
+## Estructura
+
+```
+src/
+├── analytics/
+│   ├── entities/
+│   │   ├── project-metrics.entity.ts    # Métricas por proyecto
+│   │   ├── student-metrics.entity.ts    # Métricas por estudiante
+│   │   ├── company-metrics.entity.ts    # Métricas por empresa
+│   │   ├── platform-metrics.entity.ts   # Snapshot diario global
+│   │   ├── skill-trend.entity.ts        # Demanda vs oferta de skills
+│   │   └── report.entity.ts             # Reportes generados (JSONB)
+│   ├── dto/
+│   │   ├── metrics-query.dto.ts         # Filtros: from, to, periodId, groupBy
+│   │   └── generate-report.dto.ts       # Tipo y parámetros del reporte
+│   ├── analytics.service.ts
+│   ├── analytics.controller.ts
+│   ├── analytics.module.ts
+│   ├── analytics.service.spec.ts        # 36 tests
+│   └── analytics.controller.spec.ts     # 10 tests
+├── config/
+│   └── database.config.ts
+├── health/
+│   └── health.controller.ts
+├── app.module.ts
+└── main.ts
 ```
 
-## Compile and run the project
+---
+
+## Endpoints
+
+Base: `api/v1/analytics`
+
+| Método | Ruta | Roles | Descripción |
+|--------|------|-------|-------------|
+| GET | `/dashboard` | ADMIN, FACULTY | Dashboard institucional |
+| GET | `/platform` | ADMIN, FACULTY | Métricas históricas de la plataforma |
+| GET | `/projects/:projectId` | ADMIN, FACULTY, COMPANY | Historial de métricas del proyecto |
+| GET | `/projects/:projectId/summary` | ADMIN, FACULTY, COMPANY | Snapshot más reciente del proyecto |
+| GET | `/students/:studentId` | ADMIN, FACULTY, STUDENT* | Historial de métricas del estudiante |
+| GET | `/students/:studentId/summary` | ADMIN, FACULTY, STUDENT* | Snapshot más reciente del estudiante |
+| GET | `/companies/:companyId` | ADMIN, FACULTY, COMPANY* | Historial de métricas de la empresa |
+| GET | `/companies/:companyId/summary` | ADMIN, FACULTY, COMPANY* | Snapshot más reciente de la empresa |
+| GET | `/skills/trends` | Todos | Tendencias de skills (demanda vs oferta) |
+| GET | `/skills/top` | Todos | Top 10 skills más demandados |
+| POST | `/reports` | ADMIN, FACULTY | Generar un reporte |
+| GET | `/reports` | ADMIN, FACULTY | Listar reportes generados |
+| GET | `/reports/:id` | ADMIN, FACULTY | Obtener reporte por ID |
+
+> \* Estudiantes y empresas solo acceden a sus propias métricas (scoped automáticamente).
+
+### Query params comunes (`MetricsQueryDto`)
+
+| Parámetro | Tipo | Descripción |
+|-----------|------|-------------|
+| `from` | ISO date | Fecha inicio del rango |
+| `to` | ISO date | Fecha fin del rango |
+| `periodId` | UUID | Filtrar por periodo académico |
+| `groupBy` | `day\|week\|month` | Agrupación (referencial) |
+
+---
+
+## Tipos de reportes
+
+| `reportType` | Descripción |
+|-------------|-------------|
+| `period_summary` | Resumen general del periodo: plataforma + top skills |
+| `skill_gap_analysis` | Análisis de brecha demanda/oferta por skill |
+| `matching_effectiveness` | Efectividad del matching (scores, tiempos) |
+| `company_performance` | Rendimiento de empresas |
+| `student_outcomes` | Resultados de estudiantes |
+| `custom` | Reporte libre con parámetros arbitrarios |
+
+---
+
+## Eventos publicados
+
+| Evento | Cuándo |
+|--------|--------|
+| `analytics.report.generated` | Al generar un reporte exitosamente |
+
+Este servicio **no consume** eventos de RabbitMQ — las métricas se registran vía API interna.
+
+---
+
+## Ejecución
 
 ```bash
-# development
-$ npm run start
+# Desarrollo con hot-reload
+npm run start:dev
 
-# watch mode
-$ npm run start:dev
+# Tests
+npm run test
 
-# production mode
-$ npm run start:prod
+# Build
+npm run build
 ```
 
-## Run tests
+---
 
-```bash
-# unit tests
-$ npm run test
+## Variables de entorno
 
-# e2e tests
-$ npm run test:e2e
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `PORT` | `3012` | Puerto del servicio |
+| `DATABASE_HOST` | `localhost` | Host de PostgreSQL |
+| `DATABASE_PORT` | `5435` | Puerto externo de PostgreSQL |
+| `DATABASE_USER` | `collabu_admin` | Usuario de BD |
+| `DATABASE_PASSWORD` | `collabu_secret_2025` | Contraseña de BD |
+| `DATABASE_NAME` | `analytics_db` | Base de datos |
+| `RABBITMQ_URL` | `amqp://admin:admin@localhost:5672` | URL de RabbitMQ |
+| `JWT_SECRET` | — | Secret para validar tokens JWT |
 
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
