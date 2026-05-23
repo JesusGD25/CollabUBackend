@@ -7,7 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindOptionsWhere } from 'typeorm';
+import { Repository, FindOptionsWhere, In, MoreThanOrEqual } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -30,9 +30,15 @@ import {
 
 /** Transiciones de estado permitidas para la empresa */
 const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
-  [ApplicationStatus.PENDING]: [ApplicationStatus.UNDER_REVIEW, ApplicationStatus.REJECTED],
+  [ApplicationStatus.PENDING]: [
+    ApplicationStatus.UNDER_REVIEW,
+    ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.INTERVIEW,
+    ApplicationStatus.REJECTED,
+  ],
   [ApplicationStatus.UNDER_REVIEW]: [
     ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.INTERVIEW,
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.SHORTLISTED]: [
@@ -40,10 +46,19 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.INTERVIEW]: [ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED],
-  [ApplicationStatus.ACCEPTED]: [ApplicationStatus.COMPLETED],
+  [ApplicationStatus.ACCEPTED]: [
+    ApplicationStatus.IN_PROGRESS,
+    ApplicationStatus.COMPLETED,
+    ApplicationStatus.CANCELLED,
+  ],
+  [ApplicationStatus.IN_PROGRESS]: [
+    ApplicationStatus.COMPLETED,
+    ApplicationStatus.CANCELLED,
+  ],
   [ApplicationStatus.REJECTED]: [],
   [ApplicationStatus.WITHDRAWN]: [],
   [ApplicationStatus.COMPLETED]: [],
+  [ApplicationStatus.CANCELLED]: [],
 };
 
 export interface PaginatedApplicationsResponse {
@@ -169,7 +184,7 @@ export class ApplicationService {
     studentId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, sortBy = 'appliedAt', sortDir = 'DESC' } = query;
 
     const where: FindOptionsWhere<Application> = { studentId };
     if (status) where.status = status;
@@ -177,7 +192,45 @@ export class ApplicationService {
     const [data, total] = await this.applicationRepo.findAndCount({
       where,
       relations: ['interviews', 'deliverables'],
-      order: { appliedAt: 'DESC' },
+      order: { [sortBy]: sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getReceivedApplications(
+    companyId: string,
+    query: ApplicationQueryDto,
+  ): Promise<PaginatedApplicationsResponse> {
+    const { page = 1, limit = 20, status, minMatchScore, sortBy = 'appliedAt', sortDir = 'DESC' } = query;
+
+    let projectIds: string[] = [];
+    try {
+      projectIds = await this.httpClient.get<string[]>(
+        'project',
+        `/internal/projects/company/${companyId}`,
+      );
+    } catch (err) {
+      this.logger.error(`Error obteniendo proyectos de la empresa ${companyId}: ${err.message}`);
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+
+    if (!projectIds || projectIds.length === 0) {
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+
+    const where: FindOptionsWhere<Application> = { projectId: In(projectIds) };
+    if (status) where.status = status;
+    if (minMatchScore !== undefined) {
+      where.matchScore = MoreThanOrEqual(minMatchScore);
+    }
+
+    const [data, total] = await this.applicationRepo.findAndCount({
+      where,
+      relations: ['interviews', 'deliverables'],
+      order: { [sortBy]: sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -190,15 +243,26 @@ export class ApplicationService {
     companyUserId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, minMatchScore, sortBy, sortDir = 'DESC' } = query;
 
     const where: FindOptionsWhere<Application> = { projectId };
     if (status) where.status = status;
+    if (minMatchScore !== undefined) {
+      where.matchScore = MoreThanOrEqual(minMatchScore);
+    }
+
+    const order: any = {};
+    if (sortBy) {
+      order[sortBy] = sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+    } else {
+      order.matchScore = 'DESC';
+      order.appliedAt = 'DESC';
+    }
 
     const [data, total] = await this.applicationRepo.findAndCount({
       where,
       relations: ['interviews', 'deliverables'],
-      order: { matchScore: 'DESC', appliedAt: 'DESC' },
+      order,
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -351,11 +415,13 @@ export class ApplicationService {
     const application = await this.findApplicationById(applicationId);
 
     if (
+      application.status !== ApplicationStatus.PENDING &&
+      application.status !== ApplicationStatus.UNDER_REVIEW &&
       application.status !== ApplicationStatus.SHORTLISTED &&
       application.status !== ApplicationStatus.INTERVIEW
     ) {
       throw new BadRequestException(
-        'Solo se pueden programar entrevistas para postulaciones en estado "shortlisted" o "interview"',
+        'Solo se pueden programar entrevistas para postulaciones en estado "pending", "under_review", "shortlisted" o "interview"',
       );
     }
 
@@ -372,7 +438,11 @@ export class ApplicationService {
     const saved = await this.interviewRepo.save(interview);
 
     // Mover a estado "interview" si aún no está
-    if (application.status === ApplicationStatus.SHORTLISTED) {
+    if (
+      application.status === ApplicationStatus.PENDING ||
+      application.status === ApplicationStatus.UNDER_REVIEW ||
+      application.status === ApplicationStatus.SHORTLISTED
+    ) {
       await this.updateStatus(applicationId, companyUserId, {
         status: ApplicationStatus.INTERVIEW,
         comment: 'Entrevista programada',
@@ -559,6 +629,15 @@ export class ApplicationService {
 
   async countByProject(projectId: string): Promise<number> {
     return this.applicationRepo.count({ where: { projectId } });
+  }
+
+  /** Retorna todos los projectIds a los que el estudiante ha aplicado (cualquier estado) */
+  async getAppliedProjectIds(studentId: string): Promise<string[]> {
+    const apps = await this.applicationRepo.find({
+      where: { studentId },
+      select: ['projectId'],
+    });
+    return apps.map((a) => a.projectId);
   }
 
   /** Llamado por el subscriber de auth.user.deactivated */

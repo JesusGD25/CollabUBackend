@@ -116,10 +116,10 @@ describe('ProjectController', () => {
         const expected = [{ id: 'project-uuid-1', title: 'Mi proyecto' }];
         mockProjectService.getMyProjects.mockResolvedValue(expected);
 
-        const result = await controller.getMyProjects(mockUser);
+        const result = await controller.getMyProjects(mockUser, {} as any);
 
         expect(result).toEqual(expected);
-        expect(mockProjectService.getMyProjects).toHaveBeenCalledWith('user-uuid-1');
+        expect(mockProjectService.getMyProjects).toHaveBeenCalledWith('user-uuid-1', {});
       });
     });
 

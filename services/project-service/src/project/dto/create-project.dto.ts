@@ -43,6 +43,10 @@ export class CreateProjectDto {
   startDate?: string;
 
   @IsOptional()
+  @IsDateString()
+  endDate?: string;
+
+  @IsOptional()
   @IsEnum(LocationType)
   locationType?: LocationType;
 

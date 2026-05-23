@@ -63,6 +63,13 @@ export class ApplicationController {
     return this.applicationService.getMyApplications(user.id, query);
   }
 
+  @Get('received')
+  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Ver postulaciones recibidas (empresa)' })
+  getReceivedApplications(@CurrentUser() user: any, @Query() query: ApplicationQueryDto) {
+    return this.applicationService.getReceivedApplications(user.companyId || user.userId || user.id, query);
+  }
+
   @Get(':id')
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver detalle de una postulación' })

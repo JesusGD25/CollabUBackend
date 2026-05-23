@@ -9,6 +9,9 @@ const ALLOWED_STATUS_TRANSITIONS: ApplicationStatus[] = [
   ApplicationStatus.INTERVIEW,
   ApplicationStatus.ACCEPTED,
   ApplicationStatus.REJECTED,
+  ApplicationStatus.IN_PROGRESS,
+  ApplicationStatus.COMPLETED,
+  ApplicationStatus.CANCELLED,
 ];
 
 export class UpdateApplicationStatusDto {

@@ -42,4 +42,12 @@ export class ProjectInternalController {
     await this.projectService.incrementApplications(projectId);
     return { message: 'Contador de postulaciones incrementado' };
   }
+
+  @Get('company/:companyId')
+  @ApiOperation({ summary: 'Obtener IDs de proyectos de una empresa (uso interno)' })
+  @ApiParam({ name: 'companyId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'IDs de proyectos obtenidos' })
+  async getProjectIdsByCompany(@Param('companyId', ParseUUIDPipe) companyId: string) {
+    return this.projectService.getProjectIdsByCompany(companyId);
+  }
 }
