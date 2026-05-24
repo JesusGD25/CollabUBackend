@@ -73,8 +73,9 @@ export class CreateProjectDto {
   applicationDeadline?: string;
 
   @IsOptional()
-  @IsString()
-  academicProgram?: string;
+  @IsArray()
+  @IsString({ each: true })
+  academicPrograms?: string[];
 
   @IsOptional()
   @IsInt()

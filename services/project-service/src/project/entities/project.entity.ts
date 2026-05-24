@@ -104,8 +104,8 @@ export class Project {
   @Column({ name: 'application_deadline', type: 'date', nullable: true })
   applicationDeadline: Date;
 
-  @Column({ name: 'academic_program', nullable: true })
-  academicProgram: string;
+  @Column({ name: 'academic_programs', type: 'simple-array', nullable: true })
+  academicPrograms: string[];
 
   @Column({ name: 'minimum_semester', nullable: true })
   minimumSemester: number;

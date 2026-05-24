@@ -105,7 +105,7 @@ export class ProjectService {
       compensationAmount: dto.compensationAmount,
       positionsAvailable: dto.positionsAvailable,
       applicationDeadline: dto.applicationDeadline ? new Date(dto.applicationDeadline) : undefined,
-      academicProgram: dto.academicProgram,
+      academicPrograms: dto.academicPrograms,
       minimumSemester: dto.minimumSemester,
     });
 
@@ -203,7 +203,14 @@ export class ProjectService {
         await this.tagRepo.save(tags);
       }
       delete dto.tags;
+      // Prevenir que typeorm intente actualizar tags eliminados
+      delete (project as any).tags;
     }
+
+    // Prevenir problemas similares con otras relaciones
+    delete (project as any).requirements;
+    delete (project as any).deliverables;
+    delete (project as any).activities;
 
     Object.assign(project, dto);
     await this.projectRepo.save(project);
@@ -327,7 +334,7 @@ export class ProjectService {
 
     if (query.search) {
       qb.andWhere(
-        '(project.title ILIKE :search OR project.description ILIKE :search OR project.academicProgram ILIKE :search)',
+        '(project.title ILIKE :search OR project.description ILIKE :search OR project.academicPrograms ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
@@ -341,7 +348,7 @@ export class ProjectService {
     }
 
     if (query.academicProgram) {
-      qb.andWhere('project.academicProgram ILIKE :program', {
+      qb.andWhere('project.academicPrograms ILIKE :program', {
         program: `%${query.academicProgram}%`,
       });
     }
@@ -654,7 +661,7 @@ export class ProjectService {
     return {
       projectId: project.id,
       projectType: project.projectType,
-      academicProgram: project.academicProgram,
+      academicPrograms: project.academicPrograms,
       minimumSemester: project.minimumSemester,
       locationType: project.locationType,
       requirements: (project.requirements || []).map((r) => ({
