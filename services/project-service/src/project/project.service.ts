@@ -87,6 +87,8 @@ export class ProjectService {
       this.logger.warn(`No se pudo verificar la empresa ${companyId}: ${error.message}`);
     }
 
+    this.validateDates(dto.startDate, dto.endDate, dto.applicationDeadline);
+
     const project = this.projectRepo.create({
       companyId,
       createdByUserId: userId,
@@ -132,6 +134,17 @@ export class ProjectService {
     return this.getProjectById(saved.id);
   }
 
+  private validateDates(start?: Date | string, end?: Date | string, deadline?: Date | string) {
+    if (!start) return;
+    const startDt = new Date(start);
+    if (end && new Date(end) <= startDt) {
+      throw new BadRequestException('La fecha de fin debe ser posterior a la fecha de inicio');
+    }
+    if (deadline && new Date(deadline) >= startDt) {
+      throw new BadRequestException('La fecha límite de aplicaciones debe ser anterior a la fecha de inicio');
+    }
+  }
+
   async getProjectById(projectId: string, incrementViews = false): Promise<Project> {
     const project = await this.projectRepo.findOne({
       where: { id: projectId },
@@ -173,6 +186,12 @@ export class ProjectService {
     if (project.status !== ProjectStatus.DRAFT && project.status !== ProjectStatus.PUBLISHED) {
       throw new BadRequestException('Solo se pueden editar proyectos en estado draft o published');
     }
+
+    this.validateDates(
+      dto.startDate || project.startDate,
+      dto.endDate || project.endDate,
+      dto.applicationDeadline || project.applicationDeadline,
+    );
 
     // Procesar tags separadamente
     if (dto.tags !== undefined) {
