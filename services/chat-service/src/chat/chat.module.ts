@@ -28,7 +28,7 @@ import { ChatGateway } from './chat.gateway';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
+        secret: configService.get<string>('JWT_SECRET') || 'collabu-jwt-super-secret-key-change-in-production-2025',
         signOptions: {
           expiresIn: configService.get<any>('JWT_EXPIRATION', '3600s'),
         },

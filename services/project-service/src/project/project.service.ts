@@ -27,7 +27,7 @@ import {
 } from './dto';
 
 export interface PaginatedProjectsResponse {
-  data: Project[];
+  data: any[]; // Usamos any para permitir el mapeo de tags a strings en la respuesta
   meta: {
     total: number;
     page: number;
@@ -59,9 +59,21 @@ export class ProjectService {
     private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
+  /**
+   * Formatea un proyecto para la respuesta de la API, 
+   * convirtiendo la relación de tags en un array de strings.
+   */
+  private formatProject(project: Project): any {
+    if (!project) return null;
+    return {
+      ...project,
+      tags: project.tags?.map((t: any) => (typeof t === 'string' ? t : t.tag)) || [],
+    };
+  }
+
   // ── PROYECTOS ──
 
-  async createProject(userId: string, companyId: string, dto: CreateProjectDto): Promise<Project> {
+  async createProject(userId: string, companyId: string, dto: CreateProjectDto): Promise<any> {
     // Verificar que la empresa existe y está verificada
     try {
       const companyCheck = await this.httpClient.get<{ exists: boolean; isActive: boolean; isVerified: boolean }>(
@@ -131,7 +143,8 @@ export class ProjectService {
     );
 
     this.logger.log(`Proyecto creado: ${saved.id} por usuario ${userId}`);
-    return this.getProjectById(saved.id);
+    const fullProject = await this.getProjectEntityById(saved.id);
+    return this.formatProject(fullProject);
   }
 
   private validateDates(start?: Date | string, end?: Date | string, deadline?: Date | string) {
@@ -145,7 +158,12 @@ export class ProjectService {
     }
   }
 
-  async getProjectById(projectId: string, incrementViews = false): Promise<Project> {
+  async getProjectById(projectId: string, incrementViews = false): Promise<any> {
+    const project = await this.getProjectEntityById(projectId, incrementViews);
+    return this.formatProject(project);
+  }
+
+  private async getProjectEntityById(projectId: string, incrementViews = false): Promise<Project> {
     const project = await this.projectRepo.findOne({
       where: { id: projectId },
       relations: ['requirements', 'deliverables', 'tags', 'activities'],
@@ -168,7 +186,7 @@ export class ProjectService {
     return project;
   }
 
-  async getProjectBySlug(slug: string): Promise<Project> {
+  async getProjectBySlug(slug: string): Promise<any> {
     const project = await this.projectRepo.findOne({
       where: { slug },
       relations: ['requirements', 'deliverables', 'tags'],
@@ -176,11 +194,11 @@ export class ProjectService {
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado');
     }
-    return project;
+    return this.formatProject(project);
   }
 
-  async updateProject(projectId: string, userId: string, dto: UpdateProjectDto): Promise<Project> {
-    const project = await this.getProjectById(projectId);
+  async updateProject(projectId: string, userId: string, dto: UpdateProjectDto): Promise<any> {
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     if (project.status !== ProjectStatus.DRAFT && project.status !== ProjectStatus.PUBLISHED) {
@@ -221,15 +239,16 @@ export class ProjectService {
       'project-service',
     );
 
-    return this.getProjectById(projectId);
+    const updated = await this.getProjectEntityById(projectId);
+    return this.formatProject(updated);
   }
 
   async updateProjectStatus(
     projectId: string,
     userId: string,
     dto: UpdateProjectStatusDto,
-  ): Promise<Project> {
-    const project = await this.getProjectById(projectId);
+  ): Promise<any> {
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const validTransitions = VALID_TRANSITIONS[project.status];
@@ -284,11 +303,11 @@ export class ProjectService {
     }
 
     this.logger.log(`Estado del proyecto ${projectId} cambiado: ${previousStatus} → ${dto.status}`);
-    return project;
+    return this.formatProject(project);
   }
 
   async deleteProject(projectId: string, userId: string, isAdmin = false): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     if (!isAdmin) {
       this.verifyOwnership(project, userId);
     }
@@ -386,7 +405,7 @@ export class ProjectService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data,
+      data: data.map((p) => this.formatProject(p)),
       meta: {
         total,
         page,
@@ -414,7 +433,7 @@ export class ProjectService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data,
+      data: data.map((p) => this.formatProject(p)),
       meta: {
         total,
         page,
@@ -456,7 +475,7 @@ export class ProjectService {
   // ── REQUISITOS ──
 
   async getRequirements(projectId: string): Promise<ProjectRequirement[]> {
-    await this.getProjectById(projectId); // verifica existencia
+    await this.getProjectEntityById(projectId); // verifica existencia
     return this.requirementRepo.find({
       where: { projectId },
       order: { displayOrder: 'ASC', createdAt: 'ASC' },
@@ -468,7 +487,7 @@ export class ProjectService {
     userId: string,
     dto: AddProjectRequirementDto,
   ): Promise<ProjectRequirement> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const requirement = this.requirementRepo.create({ ...dto, projectId });
@@ -481,7 +500,7 @@ export class ProjectService {
     userId: string,
     dto: Partial<AddProjectRequirementDto>,
   ): Promise<ProjectRequirement> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const requirement = await this.requirementRepo.findOne({
@@ -496,7 +515,7 @@ export class ProjectService {
   }
 
   async deleteRequirement(projectId: string, requirementId: string, userId: string): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const requirement = await this.requirementRepo.findOne({
@@ -512,7 +531,7 @@ export class ProjectService {
   // ── ENTREGABLES ──
 
   async getDeliverables(projectId: string): Promise<ProjectDeliverable[]> {
-    await this.getProjectById(projectId);
+    await this.getProjectEntityById(projectId);
     return this.deliverableRepo.find({
       where: { projectId },
       order: { displayOrder: 'ASC', createdAt: 'ASC' },
@@ -524,7 +543,7 @@ export class ProjectService {
     userId: string,
     dto: AddProjectDeliverableDto,
   ): Promise<ProjectDeliverable> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const deliverable = this.deliverableRepo.create({ ...dto, projectId });
@@ -537,7 +556,7 @@ export class ProjectService {
     userId: string,
     dto: Partial<AddProjectDeliverableDto>,
   ): Promise<ProjectDeliverable> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const deliverable = await this.deliverableRepo.findOne({
@@ -552,7 +571,7 @@ export class ProjectService {
   }
 
   async deleteDeliverable(projectId: string, deliverableId: string, userId: string): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const deliverable = await this.deliverableRepo.findOne({
@@ -568,7 +587,7 @@ export class ProjectService {
   // ── TAGS ──
 
   async addTags(projectId: string, userId: string, tags: string[]): Promise<ProjectTag[]> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const newTags: ProjectTag[] = [];
@@ -584,7 +603,7 @@ export class ProjectService {
   }
 
   async deleteTag(projectId: string, tagId: string, userId: string): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const tag = await this.tagRepo.findOne({ where: { id: tagId, projectId } });
@@ -598,7 +617,7 @@ export class ProjectService {
   // ── ACTIVIDADES ──
 
   async getActivities(projectId: string): Promise<ProjectActivity[]> {
-    await this.getProjectById(projectId);
+    await this.getProjectEntityById(projectId);
     return this.activityRepo.find({
       where: { projectId },
       order: { dueDate: 'ASC', createdAt: 'DESC' },
@@ -610,7 +629,7 @@ export class ProjectService {
     userId: string,
     dto: CreateActivityDto,
   ): Promise<ProjectActivity> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const activity = this.activityRepo.create({
@@ -634,7 +653,7 @@ export class ProjectService {
     activityId: string,
     dto: UpdateActivityDto,
   ): Promise<ProjectActivity> {
-    await this.getProjectById(projectId);
+    await this.getProjectEntityById(projectId);
 
     const activity = await this.activityRepo.findOne({
       where: { id: activityId, projectId },
@@ -706,3 +725,4 @@ export class ProjectService {
     }
   }
 }
+

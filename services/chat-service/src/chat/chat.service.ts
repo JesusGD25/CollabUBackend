@@ -59,13 +59,13 @@ export class ChatService {
   async createConversation(
     userId: string,
     dto: CreateConversationDto,
-  ): Promise<Conversation> {
+  ): Promise<any> {
     const type = dto.type ?? ConversationType.DIRECT;
 
     // Para conversaciones directas, verificar que no exista ya entre los mismos dos usuarios
     if (type === ConversationType.DIRECT && dto.participantIds.length === 1) {
       const existing = await this.findDirectConversation(userId, dto.participantIds[0]);
-      if (existing) return existing;
+      if (existing) return this.getConversationById(existing.id, userId);
     }
 
     const conversation = this.conversationRepo.create({
@@ -111,7 +111,26 @@ export class ChatService {
     );
 
     this.logger.log(`Conversación ${conversation.id} creada por ${userId}`);
-    return conversation;
+    return this.getConversationById(conversation.id, userId);
+  }
+
+  private async mapMessage(msg: Message, currentUserId: string): Promise<any> {
+    const sender = await this.participantRepo.findOne({
+      where: { conversationId: msg.conversationId, userId: msg.senderId },
+    });
+
+    const senderDisplayName = sender?.nickname || (msg.senderId === currentUserId ? 'Tú' : 'Usuario');
+
+    return {
+      id: msg.id,
+      conversationId: msg.conversationId,
+      senderId: msg.senderId,
+      senderName: senderDisplayName,
+      content: msg.content,
+      messageType: msg.type,
+      isRead: false,
+      createdAt: msg.createdAt,
+    };
   }
 
   async getUserConversations(
@@ -147,13 +166,50 @@ export class ChatService {
       .take(limit)
       .getManyAndCount();
 
-    // Enriquecer con unread_count del participante
+    // Enriquecer con unread_count del participante, participantes y lastMessage
     const enriched = await Promise.all(
       data.map(async (conv) => {
         const participant = await this.participantRepo.findOne({
           where: { conversationId: conv.id, userId },
         });
-        return { ...conv, unreadCount: participant?.unreadCount ?? 0 };
+
+        const participants = await this.participantRepo.find({
+          where: { conversationId: conv.id, isActive: true },
+        });
+
+        const enrichedParticipants = participants.map((p) => ({
+          userId: p.userId,
+          displayName: p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
+          avatarUrl: undefined,
+          role: p.role,
+          isOnline: false,
+        }));
+
+        let lastMessage: any = undefined;
+        if (conv.lastMessageAt) {
+          const lastMsgEntity = await this.messageRepo.findOne({
+            where: { conversationId: conv.id },
+            order: { createdAt: 'DESC' },
+          });
+          if (lastMsgEntity) {
+            lastMessage = await this.mapMessage(lastMsgEntity, userId);
+          }
+        }
+
+        return {
+          id: conv.id,
+          name: conv.name,
+          description: conv.description,
+          projectId: conv.projectId,
+          isActive: conv.isActive,
+          lastMessageAt: conv.lastMessageAt,
+          lastMessagePreview: conv.lastMessagePreview,
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+          unreadCount: participant?.unreadCount ?? 0,
+          participants: enrichedParticipants,
+          lastMessage,
+        };
       }),
     );
 
@@ -166,11 +222,52 @@ export class ChatService {
     };
   }
 
-  async getConversationById(conversationId: string, userId: string): Promise<Conversation> {
+  async getConversationById(conversationId: string, userId: string): Promise<any> {
     await this.assertParticipant(conversationId, userId);
     const conv = await this.conversationRepo.findOne({ where: { id: conversationId } });
     if (!conv) throw new NotFoundException('Conversación no encontrada');
-    return conv;
+
+    const participant = await this.participantRepo.findOne({
+      where: { conversationId, userId },
+    });
+
+    const participants = await this.participantRepo.find({
+      where: { conversationId, isActive: true },
+    });
+
+    const enrichedParticipants = participants.map((p) => ({
+      userId: p.userId,
+      displayName: p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
+      avatarUrl: undefined,
+      role: p.role,
+      isOnline: false,
+    }));
+
+    let lastMessage: any = undefined;
+    if (conv.lastMessageAt) {
+      const lastMsgEntity = await this.messageRepo.findOne({
+        where: { conversationId },
+        order: { createdAt: 'DESC' },
+      });
+      if (lastMsgEntity) {
+        lastMessage = await this.mapMessage(lastMsgEntity, userId);
+      }
+    }
+
+    return {
+      id: conv.id,
+      name: conv.name,
+      description: conv.description,
+      projectId: conv.projectId,
+      isActive: conv.isActive,
+      lastMessageAt: conv.lastMessageAt,
+      lastMessagePreview: conv.lastMessagePreview,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+      unreadCount: participant?.unreadCount ?? 0,
+      participants: enrichedParticipants,
+      lastMessage,
+    };
   }
 
   async archiveConversation(conversationId: string, userId: string): Promise<{ message: string }> {
@@ -190,7 +287,7 @@ export class ChatService {
     userId: string,
     conversationId: string,
     dto: SendMessageDto,
-  ): Promise<Message> {
+  ): Promise<any> {
     await this.assertParticipant(conversationId, userId);
 
     const message = this.messageRepo.create({
@@ -230,14 +327,14 @@ export class ChatService {
     );
 
     this.logger.log(`Mensaje ${message.id} enviado en conversación ${conversationId}`);
-    return message;
+    return this.mapMessage(message, userId);
   }
 
   async getMessages(
     userId: string,
     conversationId: string,
     query: MessagesQueryDto,
-  ): Promise<{ data: Message[]; hasMore: boolean }> {
+  ): Promise<{ data: any[]; hasMore: boolean }> {
     await this.assertParticipant(conversationId, userId);
 
     const limit = query.limit ?? 50;
@@ -266,7 +363,11 @@ export class ChatService {
     const hasMore = messages.length > limit;
     if (hasMore) messages.pop();
 
-    return { data: messages.reverse(), hasMore };
+    const enrichedData = await Promise.all(
+      messages.map((msg) => this.mapMessage(msg, userId)),
+    );
+
+    return { data: enrichedData.reverse(), hasMore };
   }
 
   async editMessage(
