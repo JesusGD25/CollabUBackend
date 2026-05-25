@@ -10,7 +10,10 @@ import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', '../../.env'],
+    }),
     TypeOrmModule.forRoot(databaseConfig()),
     RabbitMQModule.forRoot(),
     NotificationModule,

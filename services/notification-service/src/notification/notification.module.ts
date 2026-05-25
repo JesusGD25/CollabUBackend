@@ -10,6 +10,7 @@ import { PushSubscription } from './entities/push-subscription.entity';
 import { NotificationService } from './notification.service';
 import { NotificationController } from './notification.controller';
 import { NotificationInternalController } from './notification-internal.controller';
+import { NotificationGateway } from './notification.gateway';
 import { EventPublisher } from '@collab-u/shared';
 
 @Module({
@@ -23,7 +24,7 @@ import { EventPublisher } from '@collab-u/shared';
     ]),
   ],
   controllers: [NotificationController, NotificationInternalController],
-  providers: [NotificationService, EventPublisher],
-  exports: [NotificationService],
+  providers: [NotificationService, EventPublisher, NotificationGateway],
+  exports: [NotificationService, NotificationGateway],
 })
 export class NotificationModule {}

@@ -2,6 +2,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere } from 'typeorm';
@@ -13,6 +15,7 @@ import {
 } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
 import { PushSubscription } from './entities/push-subscription.entity';
+import { NotificationGateway } from './notification.gateway';
 
 import {
   CreateNotificationDto,
@@ -41,6 +44,8 @@ export class NotificationService {
     @InjectRepository(PushSubscription)
     private readonly pushSubscriptionRepo: Repository<PushSubscription>,
     private readonly eventPublisher: EventPublisher,
+    @Inject(forwardRef(() => NotificationGateway))
+    private readonly notificationGateway: NotificationGateway,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────
@@ -67,6 +72,9 @@ export class NotificationService {
       { notificationId: saved.id, userId: saved.userId, type: saved.type },
       'notification-service',
     );
+
+    // Enviar notificación por WebSocket en tiempo real
+    this.notificationGateway.sendNotificationToUser(saved.userId, saved);
 
     return saved;
   }
