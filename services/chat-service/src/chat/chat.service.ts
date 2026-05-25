@@ -441,6 +441,21 @@ export class ChatService {
     return this.conversationRepo.findOne({ where: { id: p1.conversationId } });
   }
 
+  async isParticipant(conversationId: string, userId: string): Promise<boolean> {
+    const participant = await this.participantRepo.findOne({
+      where: { conversationId, userId, isActive: true },
+    });
+    return !!participant;
+  }
+
+  async getUserConversationIds(userId: string): Promise<string[]> {
+    const participations = await this.participantRepo.find({
+      where: { userId, isActive: true },
+      select: ['conversationId'],
+    });
+    return participations.map((p) => p.conversationId);
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // MÉTODOS INTERNOS (inter-servicio)
   // ──────────────────────────────────────────────────────────────────

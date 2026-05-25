@@ -21,7 +21,7 @@ import { ProxyMiddleware } from './proxy/proxy.middleware';
     ]),
   ],
   controllers: [HealthController],
-  providers: [],
+  providers: [ProxyMiddleware],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
@@ -30,9 +30,14 @@ export class AppModule implements NestModule {
       .apply(GatewayAuthMiddleware)
       .forRoutes({ path: 'api/v1/*path', method: RequestMethod.ALL });
 
-    // 2. Proxy middleware — reenvía peticiones a servicios downstream
+    // 2. Proxy middleware — reenvía peticiones HTTP a servicios downstream
+    //    Las rutas /ws/* NO se registran aquí para evitar que NestJS las
+    //    procese como HTTP; los upgrades de WebSocket se manejan
+    //    exclusivamente en main.ts → server.on('upgrade')
     consumer
       .apply(ProxyMiddleware)
-      .forRoutes({ path: 'api/v1/*path', method: RequestMethod.ALL });
+      .forRoutes(
+        { path: 'api/v1/*path', method: RequestMethod.ALL },
+      );
   }
 }
