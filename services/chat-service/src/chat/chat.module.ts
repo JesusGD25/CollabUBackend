@@ -2,7 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { EventPublisher } from '@collab-u/shared';
+import { HttpModule, HttpService } from '@nestjs/axios';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Conversation } from './entities/conversation.entity';
 import { ConversationParticipant } from './entities/conversation-participant.entity';
@@ -24,6 +25,7 @@ import { ChatGateway } from './chat.gateway';
       MessageAttachment,
       MessageReaction,
     ]),
+    HttpModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -36,7 +38,18 @@ import { ChatGateway } from './chat.gateway';
     }),
   ],
   controllers: [ChatController, ChatInternalController],
-  providers: [ChatService, EventPublisher, ChatGateway],
+  providers: [
+    ChatService,
+    EventPublisher,
+    ChatGateway,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => {
+        return new MicroserviceHttpClient(httpService as any);
+      },
+      inject: [HttpService],
+    },
+  ],
   exports: [ChatService],
 })
 export class ChatModule {}

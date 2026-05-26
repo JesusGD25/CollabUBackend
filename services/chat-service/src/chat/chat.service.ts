@@ -6,8 +6,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { Repository, IsNull, In } from 'typeorm';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Conversation, ConversationType } from './entities/conversation.entity';
 import { ConversationParticipant, ParticipantRole } from './entities/conversation-participant.entity';
@@ -50,7 +50,32 @@ export class ChatService {
     @InjectRepository(MessageReaction)
     private readonly reactionRepo: Repository<MessageReaction>,
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
+
+  // Helper para consultar los nombres y avatares reales de usuarios en batch
+  private async fetchProfilesMap(userIds: string[]): Promise<Map<string, { displayName: string; avatarUrl?: string }>> {
+    const profileMap = new Map<string, { displayName: string; avatarUrl?: string }>();
+    const uniqueUserIds = Array.from(new Set(userIds)).filter(id => !!id);
+    if (uniqueUserIds.length === 0) return profileMap;
+
+    try {
+      const profiles = await this.httpClient.post<Array<{ userId: string; firstName: string; lastName: string; avatarUrl: string | null }>>(
+        'user',
+        '/internal/users/batch-basic',
+        { userIds: uniqueUserIds }
+      );
+      profiles.forEach(p => {
+        profileMap.set(p.userId, {
+          displayName: `${p.firstName} ${p.lastName}`.trim(),
+          avatarUrl: p.avatarUrl || undefined,
+        });
+      });
+    } catch (err: any) {
+      this.logger.error(`Error fetching user profiles in batch: ${err.message}`);
+    }
+    return profileMap;
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // CONVERSACIONES
@@ -114,12 +139,18 @@ export class ChatService {
     return this.getConversationById(conversation.id, userId);
   }
 
-  private async mapMessage(msg: Message, currentUserId: string): Promise<any> {
+  private async mapMessage(msg: Message, currentUserId: string, profileMap?: Map<string, { displayName: string }>): Promise<any> {
     const sender = await this.participantRepo.findOne({
       where: { conversationId: msg.conversationId, userId: msg.senderId },
     });
 
-    const senderDisplayName = sender?.nickname || (msg.senderId === currentUserId ? 'Tú' : 'Usuario');
+    let senderDisplayName = sender?.nickname || (msg.senderId === currentUserId ? 'Tú' : 'Usuario');
+    if (msg.senderId !== currentUserId) {
+      const profile = profileMap?.get(msg.senderId);
+      if (profile) {
+        senderDisplayName = profile.displayName;
+      }
+    }
 
     return {
       id: msg.id,
@@ -166,8 +197,9 @@ export class ChatService {
       .take(limit)
       .getManyAndCount();
 
-    // Enriquecer con unread_count del participante, participantes y lastMessage
-    const enriched = await Promise.all(
+    // Recolectar todos los userIds de los participantes para buscar perfiles en batch
+    const allUserIds: string[] = [];
+    const rawConversationsData = await Promise.all(
       data.map(async (conv) => {
         const participant = await this.participantRepo.findOne({
           where: { conversationId: conv.id, userId },
@@ -177,13 +209,26 @@ export class ChatService {
           where: { conversationId: conv.id, isActive: true },
         });
 
-        const enrichedParticipants = participants.map((p) => ({
-          userId: p.userId,
-          displayName: p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
-          avatarUrl: undefined,
-          role: p.role,
-          isOnline: false,
-        }));
+        participants.forEach(p => allUserIds.push(p.userId));
+
+        return { conv, participant, participants };
+      })
+    );
+
+    const profileMap = await this.fetchProfilesMap(allUserIds);
+
+    const enriched = await Promise.all(
+      rawConversationsData.map(async ({ conv, participant, participants }) => {
+        const enrichedParticipants = participants.map((p) => {
+          const profile = profileMap.get(p.userId);
+          return {
+            userId: p.userId,
+            displayName: profile?.displayName || p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
+            avatarUrl: profile?.avatarUrl || undefined,
+            role: p.role,
+            isOnline: false,
+          };
+        });
 
         let lastMessage: any = undefined;
         if (conv.lastMessageAt) {
@@ -192,7 +237,7 @@ export class ChatService {
             order: { createdAt: 'DESC' },
           });
           if (lastMsgEntity) {
-            lastMessage = await this.mapMessage(lastMsgEntity, userId);
+            lastMessage = await this.mapMessage(lastMsgEntity, userId, profileMap);
           }
         }
 
@@ -235,13 +280,19 @@ export class ChatService {
       where: { conversationId, isActive: true },
     });
 
-    const enrichedParticipants = participants.map((p) => ({
-      userId: p.userId,
-      displayName: p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
-      avatarUrl: undefined,
-      role: p.role,
-      isOnline: false,
-    }));
+    const userIds = participants.map(p => p.userId);
+    const profileMap = await this.fetchProfilesMap(userIds);
+
+    const enrichedParticipants = participants.map((p) => {
+      const profile = profileMap.get(p.userId);
+      return {
+        userId: p.userId,
+        displayName: profile?.displayName || p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
+        avatarUrl: profile?.avatarUrl || undefined,
+        role: p.role,
+        isOnline: false,
+      };
+    });
 
     let lastMessage: any = undefined;
     if (conv.lastMessageAt) {
@@ -250,7 +301,7 @@ export class ChatService {
         order: { createdAt: 'DESC' },
       });
       if (lastMsgEntity) {
-        lastMessage = await this.mapMessage(lastMsgEntity, userId);
+        lastMessage = await this.mapMessage(lastMsgEntity, userId, profileMap);
       }
     }
 
@@ -315,6 +366,14 @@ export class ChatService {
       .andWhere('is_active = true')
       .execute();
 
+    // Obtener los destinatarios para notificaciones
+    const participants = await this.participantRepo.find({
+      where: { conversationId, isActive: true },
+    });
+    const recipientIds = participants
+      .map((p) => p.userId)
+      .filter((id) => id !== userId);
+
     await this.eventPublisher.publish(
       'chat.message.sent',
       {
@@ -322,12 +381,15 @@ export class ChatService {
         conversationId,
         senderId: userId,
         content: dto.content?.substring(0, 255),
+        recipientIds,
       },
       'chat-service',
     );
 
     this.logger.log(`Mensaje ${message.id} enviado en conversación ${conversationId}`);
-    return this.mapMessage(message, userId);
+    
+    const profileMap = await this.fetchProfilesMap([userId]);
+    return this.mapMessage(message, userId, profileMap);
   }
 
   async getMessages(
@@ -350,6 +412,9 @@ export class ChatService {
       if (ref) {
         qb.andWhere('m.created_at < :refDate', { refDate: ref.createdAt });
       }
+    } else if (query.page && query.page > 1) {
+      const skip = (query.page - 1) * limit;
+      qb.skip(skip);
     }
 
     if (query.after) {
@@ -363,8 +428,11 @@ export class ChatService {
     const hasMore = messages.length > limit;
     if (hasMore) messages.pop();
 
+    const senderIds = messages.map(m => m.senderId);
+    const profileMap = await this.fetchProfilesMap(senderIds);
+
     const enrichedData = await Promise.all(
-      messages.map((msg) => this.mapMessage(msg, userId)),
+      messages.map((msg) => this.mapMessage(msg, userId, profileMap)),
     );
 
     return { data: enrichedData.reverse(), hasMore };

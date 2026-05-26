@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { JwtModule } from '@nestjs/jwt';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 
 import { Notification } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
@@ -22,6 +24,16 @@ import { EventPublisher } from '@collab-u/shared';
       NotificationTemplate,
       PushSubscription,
     ]),
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET') || 'collabu-jwt-super-secret-key-change-in-production-2025',
+        signOptions: {
+          expiresIn: configService.get<any>('JWT_EXPIRATION', '3600s'),
+        },
+      }),
+    }),
   ],
   controllers: [NotificationController, NotificationInternalController],
   providers: [NotificationService, EventPublisher, NotificationGateway],

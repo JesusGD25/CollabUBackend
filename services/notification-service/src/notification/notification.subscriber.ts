@@ -161,5 +161,37 @@ export class NotificationSubscriber implements OnModuleInit {
         }
       },
     );
+
+    // chat.message.sent → notify recipients (message_received)
+    await this.eventSubscriber.subscribe(
+      'notification-service.chat.message.sent',
+      'chat.message.sent',
+      async (event) => {
+        const { senderId, content, conversationId, recipientIds } = event.data;
+        if (!recipientIds || recipientIds.length === 0) return;
+
+        this.logger.log(`Evento recibido: chat.message.sent de ${senderId} para destinatarios ${recipientIds.join(', ')}`);
+
+        const title = 'Nuevo mensaje de chat';
+        const message = content || 'Has recibido un nuevo mensaje.';
+
+        for (const recipientId of recipientIds) {
+          try {
+            await this.notificationService.createSystemNotification(
+              recipientId,
+              NotificationType.MESSAGE_RECEIVED,
+              title,
+              message,
+              { conversationId, senderId },
+            );
+          } catch (error: any) {
+            this.logger.error(
+              `Error creando notificación MESSAGE_RECEIVED para ${recipientId}: ${error.message}`,
+              error.stack,
+            );
+          }
+        }
+      },
+    );
   }
 }
