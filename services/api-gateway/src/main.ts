@@ -3,9 +3,14 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { GatewayLoggingInterceptor } from './interceptors/logging.interceptor';
+import { ProxyMiddleware } from './proxy/proxy.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  // Aumentar el límite de listeners para evitar MaxListenersExceededWarning
+  // Especialmente útil cuando muchos servicios pasan por el proxy
+  process.setMaxListeners(20);
 
   // CORS
   app.enableCors({
@@ -41,7 +46,14 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
+  const server = await app.listen(port);
+
+  // Manejar upgrades de WebSockets para el proxy
+  const proxyMiddleware = app.get(ProxyMiddleware);
+  server.on('upgrade', (req: any, socket: any, head: any) => {
+    proxyMiddleware.handleUpgrade(req, socket, head);
+  });
+
   console.log(`API Gateway corriendo en puerto ${port}`);
 }
 bootstrap();
