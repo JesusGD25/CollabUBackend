@@ -16,6 +16,8 @@ export class ProjectResponseDto {
   projectType: ProjectType;
   status: ProjectStatus;
   durationMonths?: number;
+  weeklyHours?: number;
+  totalHours?: number;
   startDate?: Date;
   endDate?: Date;
   locationType?: LocationType;

@@ -39,6 +39,16 @@ export class CreateProjectDto {
   durationMonths?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  weeklyHours?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  totalHours?: number;
+
+  @IsOptional()
   @IsDateString()
   startDate?: string;
 

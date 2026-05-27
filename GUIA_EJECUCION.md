@@ -207,13 +207,21 @@ $servicios = @(
     "api-gateway",
     "student-service",
     "company-service",
-    "project-service",
+    "project-service"
+)
+
+foreach ($svc in $servicios) {
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$PWD\services\$svc'; npm run start:dev"
+}
+```
+
+```powershell
+# Ejecutar desde: C:\...\CollabU\Backend
+$servicios = @(
     "application-service",
-    "matching-service",
     "evaluation-service",
     "notification-service",
     "chat-service",
-    "admin-service",
     "storage-service"
 )
 

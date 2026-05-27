@@ -74,6 +74,12 @@ export class Project {
   @Column({ name: 'duration_months', nullable: true })
   durationMonths: number;
 
+  @Column({ name: 'weekly_hours', type: 'int', nullable: true })
+  weeklyHours: number;
+
+  @Column({ name: 'total_hours', type: 'int', nullable: true })
+  totalHours: number;
+
   @Column({ name: 'start_date', type: 'date', nullable: true })
   startDate: Date;
 

@@ -100,6 +100,7 @@ export class ProjectService {
     }
 
     this.validateDates(dto.startDate, dto.endDate, dto.applicationDeadline);
+    this.validateHours(dto.weeklyHours, dto.totalHours);
 
     const project = this.projectRepo.create({
       companyId,
@@ -109,6 +110,8 @@ export class ProjectService {
       shortDescription: dto.shortDescription,
       projectType: dto.projectType,
       durationMonths: dto.durationMonths,
+      weeklyHours: dto.weeklyHours,
+      totalHours: dto.totalHours,
       startDate: dto.startDate ? new Date(dto.startDate) : undefined,
       endDate: dto.endDate ? new Date(dto.endDate) : undefined,
       locationType: dto.locationType,
@@ -155,6 +158,26 @@ export class ProjectService {
     }
     if (deadline && new Date(deadline) >= startDt) {
       throw new BadRequestException('La fecha límite de aplicaciones debe ser anterior a la fecha de inicio');
+    }
+  }
+
+  private validateHours(weeklyHours?: number, totalHours?: number) {
+    if (weeklyHours !== undefined && weeklyHours !== null && weeklyHours <= 0) {
+      throw new BadRequestException('Las horas semanales deben ser mayores a 0');
+    }
+    if (totalHours !== undefined && totalHours !== null && totalHours <= 0) {
+      throw new BadRequestException('Las horas totales deben ser mayores a 0');
+    }
+    if (
+      weeklyHours !== undefined &&
+      weeklyHours !== null &&
+      totalHours !== undefined &&
+      totalHours !== null &&
+      totalHours < weeklyHours
+    ) {
+      throw new BadRequestException(
+        'Las horas totales no pueden ser menores a las horas semanales',
+      );
     }
   }
 
@@ -209,6 +232,11 @@ export class ProjectService {
       dto.startDate || project.startDate,
       dto.endDate || project.endDate,
       dto.applicationDeadline || project.applicationDeadline,
+    );
+
+    this.validateHours(
+      dto.weeklyHours !== undefined ? dto.weeklyHours : project.weeklyHours,
+      dto.totalHours !== undefined ? dto.totalHours : project.totalHours,
     );
 
     // Procesar tags separadamente
