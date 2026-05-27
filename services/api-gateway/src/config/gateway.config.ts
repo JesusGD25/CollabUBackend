@@ -66,6 +66,18 @@ export const GATEWAY_ROUTES: Record<string, ServiceRoute> = {
     changeOrigin: true,
     requiresAuth: true,
   },
+  'chat-ws': {
+    target: process.env.CHAT_SERVICE_URL || 'http://localhost:3010',
+    pathPrefix: '/ws/chat',
+    changeOrigin: true,
+    requiresAuth: false, // El socket.io maneja su propia auth
+  },
+  'notifications-ws': {
+    target: process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3009',
+    pathPrefix: '/ws/notifications',
+    changeOrigin: true,
+    requiresAuth: false,
+  },
   admin: {
     target: process.env.ADMIN_SERVICE_URL || 'http://localhost:3011',
     pathPrefix: '/api/v1/admin',

@@ -2,6 +2,8 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere } from 'typeorm';
@@ -13,6 +15,7 @@ import {
 } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
 import { PushSubscription } from './entities/push-subscription.entity';
+import { NotificationGateway } from './notification.gateway';
 
 import {
   CreateNotificationDto,
@@ -41,7 +44,50 @@ export class NotificationService {
     @InjectRepository(PushSubscription)
     private readonly pushSubscriptionRepo: Repository<PushSubscription>,
     private readonly eventPublisher: EventPublisher,
+    @Inject(forwardRef(() => NotificationGateway))
+    private readonly notificationGateway: NotificationGateway,
   ) {}
+
+  private shouldSendWebSocketNotification(prefs: NotificationPreferences, type: NotificationType): boolean {
+    if (!prefs.inAppEnabled) {
+      return false;
+    }
+
+    switch (type) {
+      case NotificationType.APPLICATION_RECEIVED:
+      case NotificationType.APPLICATION_STATUS_CHANGED:
+      case NotificationType.APPLICATION_ACCEPTED:
+      case NotificationType.APPLICATION_REJECTED:
+        return prefs.applicationUpdates;
+
+      case NotificationType.INTERVIEW_SCHEDULED:
+      case NotificationType.INTERVIEW_REMINDER:
+        return prefs.interviewReminders;
+
+      case NotificationType.EVALUATION_PENDING:
+      case NotificationType.EVALUATION_COMPLETED:
+      case NotificationType.DELIVERABLE_FEEDBACK:
+        return prefs.evaluationAlerts;
+
+      case NotificationType.MATCH_RECOMMENDATION:
+        return prefs.matchRecommendations;
+
+      case NotificationType.PROJECT_NEW:
+      case NotificationType.PROJECT_DEADLINE_REMINDER:
+      case NotificationType.PROJECT_STATUS_CHANGED:
+      case NotificationType.COMPANY_VERIFIED:
+        return prefs.projectUpdates;
+
+      case NotificationType.MESSAGE_RECEIVED:
+        return prefs.chatMessages;
+
+      case NotificationType.SYSTEM_ANNOUNCEMENT:
+        return prefs.systemAnnouncements;
+
+      default:
+        return true; // Enviar por defecto si no es un tipo mapeado
+    }
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // NOTIFICATIONS
@@ -67,6 +113,17 @@ export class NotificationService {
       { notificationId: saved.id, userId: saved.userId, type: saved.type },
       'notification-service',
     );
+
+    // Obtener preferencias del usuario y verificar si habilitó notificaciones en la app
+    const prefs = await this.getPreferences(saved.userId);
+    if (this.shouldSendWebSocketNotification(prefs, saved.type)) {
+      // Enviar notificación por WebSocket en tiempo real
+      this.notificationGateway.sendNotificationToUser(saved.userId, saved);
+    }
+
+    // Emitir conteo de no leídas en tiempo real al usuario
+    const unreadCount = await this.getUnreadCount(saved.userId);
+    this.notificationGateway.sendUnreadCountToUser(saved.userId, unreadCount);
 
     return saved;
   }
@@ -119,6 +176,10 @@ export class NotificationService {
       notification.isRead = true;
       notification.readAt = new Date();
       await this.notificationRepo.save(notification);
+
+      // Emitir conteo actualizado
+      const unreadCount = await this.getUnreadCount(userId);
+      this.notificationGateway.sendUnreadCountToUser(userId, unreadCount);
     }
 
     return notification;
@@ -149,6 +210,12 @@ export class NotificationService {
         .andWhere('is_read = :isRead', { isRead: false })
         .execute();
       updated = result.affected ?? 0;
+    }
+
+    if (updated > 0) {
+      // Emitir conteo actualizado
+      const unreadCount = await this.getUnreadCount(userId);
+      this.notificationGateway.sendUnreadCountToUser(userId, unreadCount);
     }
 
     return { updated };

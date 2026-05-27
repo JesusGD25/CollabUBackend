@@ -39,6 +39,16 @@ export class CreateProjectDto {
   durationMonths?: number;
 
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  weeklyHours?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  totalHours?: number;
+
+  @IsOptional()
   @IsDateString()
   startDate?: string;
 
@@ -73,8 +83,9 @@ export class CreateProjectDto {
   applicationDeadline?: string;
 
   @IsOptional()
-  @IsString()
-  academicProgram?: string;
+  @IsArray()
+  @IsString({ each: true })
+  academicPrograms?: string[];
 
   @IsOptional()
   @IsInt()

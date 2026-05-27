@@ -6,8 +6,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { Repository, IsNull, In } from 'typeorm';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Conversation, ConversationType } from './entities/conversation.entity';
 import { ConversationParticipant, ParticipantRole } from './entities/conversation-participant.entity';
@@ -50,7 +50,32 @@ export class ChatService {
     @InjectRepository(MessageReaction)
     private readonly reactionRepo: Repository<MessageReaction>,
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
+
+  // Helper para consultar los nombres y avatares reales de usuarios en batch
+  private async fetchProfilesMap(userIds: string[]): Promise<Map<string, { displayName: string; avatarUrl?: string }>> {
+    const profileMap = new Map<string, { displayName: string; avatarUrl?: string }>();
+    const uniqueUserIds = Array.from(new Set(userIds)).filter(id => !!id);
+    if (uniqueUserIds.length === 0) return profileMap;
+
+    try {
+      const profiles = await this.httpClient.post<Array<{ userId: string; firstName: string; lastName: string; avatarUrl: string | null }>>(
+        'user',
+        '/internal/users/batch-basic',
+        { userIds: uniqueUserIds }
+      );
+      profiles.forEach(p => {
+        profileMap.set(p.userId, {
+          displayName: `${p.firstName} ${p.lastName}`.trim(),
+          avatarUrl: p.avatarUrl || undefined,
+        });
+      });
+    } catch (err: any) {
+      this.logger.error(`Error fetching user profiles in batch: ${err.message}`);
+    }
+    return profileMap;
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // CONVERSACIONES
@@ -59,13 +84,13 @@ export class ChatService {
   async createConversation(
     userId: string,
     dto: CreateConversationDto,
-  ): Promise<Conversation> {
+  ): Promise<any> {
     const type = dto.type ?? ConversationType.DIRECT;
 
     // Para conversaciones directas, verificar que no exista ya entre los mismos dos usuarios
     if (type === ConversationType.DIRECT && dto.participantIds.length === 1) {
       const existing = await this.findDirectConversation(userId, dto.participantIds[0]);
-      if (existing) return existing;
+      if (existing) return this.getConversationById(existing.id, userId);
     }
 
     const conversation = this.conversationRepo.create({
@@ -111,7 +136,32 @@ export class ChatService {
     );
 
     this.logger.log(`Conversación ${conversation.id} creada por ${userId}`);
-    return conversation;
+    return this.getConversationById(conversation.id, userId);
+  }
+
+  private async mapMessage(msg: Message, currentUserId: string, profileMap?: Map<string, { displayName: string }>): Promise<any> {
+    const sender = await this.participantRepo.findOne({
+      where: { conversationId: msg.conversationId, userId: msg.senderId },
+    });
+
+    let senderDisplayName = sender?.nickname || (msg.senderId === currentUserId ? 'Tú' : 'Usuario');
+    if (msg.senderId !== currentUserId) {
+      const profile = profileMap?.get(msg.senderId);
+      if (profile) {
+        senderDisplayName = profile.displayName;
+      }
+    }
+
+    return {
+      id: msg.id,
+      conversationId: msg.conversationId,
+      senderId: msg.senderId,
+      senderName: senderDisplayName,
+      content: msg.content,
+      messageType: msg.type,
+      isRead: false,
+      createdAt: msg.createdAt,
+    };
   }
 
   async getUserConversations(
@@ -147,13 +197,64 @@ export class ChatService {
       .take(limit)
       .getManyAndCount();
 
-    // Enriquecer con unread_count del participante
-    const enriched = await Promise.all(
+    // Recolectar todos los userIds de los participantes para buscar perfiles en batch
+    const allUserIds: string[] = [];
+    const rawConversationsData = await Promise.all(
       data.map(async (conv) => {
         const participant = await this.participantRepo.findOne({
           where: { conversationId: conv.id, userId },
         });
-        return { ...conv, unreadCount: participant?.unreadCount ?? 0 };
+
+        const participants = await this.participantRepo.find({
+          where: { conversationId: conv.id, isActive: true },
+        });
+
+        participants.forEach(p => allUserIds.push(p.userId));
+
+        return { conv, participant, participants };
+      })
+    );
+
+    const profileMap = await this.fetchProfilesMap(allUserIds);
+
+    const enriched = await Promise.all(
+      rawConversationsData.map(async ({ conv, participant, participants }) => {
+        const enrichedParticipants = participants.map((p) => {
+          const profile = profileMap.get(p.userId);
+          return {
+            userId: p.userId,
+            displayName: profile?.displayName || p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
+            avatarUrl: profile?.avatarUrl || undefined,
+            role: p.role,
+            isOnline: false,
+          };
+        });
+
+        let lastMessage: any = undefined;
+        if (conv.lastMessageAt) {
+          const lastMsgEntity = await this.messageRepo.findOne({
+            where: { conversationId: conv.id },
+            order: { createdAt: 'DESC' },
+          });
+          if (lastMsgEntity) {
+            lastMessage = await this.mapMessage(lastMsgEntity, userId, profileMap);
+          }
+        }
+
+        return {
+          id: conv.id,
+          name: conv.name,
+          description: conv.description,
+          projectId: conv.projectId,
+          isActive: conv.isActive,
+          lastMessageAt: conv.lastMessageAt,
+          lastMessagePreview: conv.lastMessagePreview,
+          createdAt: conv.createdAt,
+          updatedAt: conv.updatedAt,
+          unreadCount: participant?.unreadCount ?? 0,
+          participants: enrichedParticipants,
+          lastMessage,
+        };
       }),
     );
 
@@ -166,11 +267,58 @@ export class ChatService {
     };
   }
 
-  async getConversationById(conversationId: string, userId: string): Promise<Conversation> {
+  async getConversationById(conversationId: string, userId: string): Promise<any> {
     await this.assertParticipant(conversationId, userId);
     const conv = await this.conversationRepo.findOne({ where: { id: conversationId } });
     if (!conv) throw new NotFoundException('Conversación no encontrada');
-    return conv;
+
+    const participant = await this.participantRepo.findOne({
+      where: { conversationId, userId },
+    });
+
+    const participants = await this.participantRepo.find({
+      where: { conversationId, isActive: true },
+    });
+
+    const userIds = participants.map(p => p.userId);
+    const profileMap = await this.fetchProfilesMap(userIds);
+
+    const enrichedParticipants = participants.map((p) => {
+      const profile = profileMap.get(p.userId);
+      return {
+        userId: p.userId,
+        displayName: profile?.displayName || p.nickname || (p.role === ParticipantRole.OWNER ? 'Empresa' : 'Estudiante'),
+        avatarUrl: profile?.avatarUrl || undefined,
+        role: p.role,
+        isOnline: false,
+      };
+    });
+
+    let lastMessage: any = undefined;
+    if (conv.lastMessageAt) {
+      const lastMsgEntity = await this.messageRepo.findOne({
+        where: { conversationId },
+        order: { createdAt: 'DESC' },
+      });
+      if (lastMsgEntity) {
+        lastMessage = await this.mapMessage(lastMsgEntity, userId, profileMap);
+      }
+    }
+
+    return {
+      id: conv.id,
+      name: conv.name,
+      description: conv.description,
+      projectId: conv.projectId,
+      isActive: conv.isActive,
+      lastMessageAt: conv.lastMessageAt,
+      lastMessagePreview: conv.lastMessagePreview,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+      unreadCount: participant?.unreadCount ?? 0,
+      participants: enrichedParticipants,
+      lastMessage,
+    };
   }
 
   async archiveConversation(conversationId: string, userId: string): Promise<{ message: string }> {
@@ -190,7 +338,7 @@ export class ChatService {
     userId: string,
     conversationId: string,
     dto: SendMessageDto,
-  ): Promise<Message> {
+  ): Promise<any> {
     await this.assertParticipant(conversationId, userId);
 
     const message = this.messageRepo.create({
@@ -218,6 +366,14 @@ export class ChatService {
       .andWhere('is_active = true')
       .execute();
 
+    // Obtener los destinatarios para notificaciones
+    const participants = await this.participantRepo.find({
+      where: { conversationId, isActive: true },
+    });
+    const recipientIds = participants
+      .map((p) => p.userId)
+      .filter((id) => id !== userId);
+
     await this.eventPublisher.publish(
       'chat.message.sent',
       {
@@ -225,19 +381,22 @@ export class ChatService {
         conversationId,
         senderId: userId,
         content: dto.content?.substring(0, 255),
+        recipientIds,
       },
       'chat-service',
     );
 
     this.logger.log(`Mensaje ${message.id} enviado en conversación ${conversationId}`);
-    return message;
+    
+    const profileMap = await this.fetchProfilesMap([userId]);
+    return this.mapMessage(message, userId, profileMap);
   }
 
   async getMessages(
     userId: string,
     conversationId: string,
     query: MessagesQueryDto,
-  ): Promise<{ data: Message[]; hasMore: boolean }> {
+  ): Promise<{ data: any[]; hasMore: boolean }> {
     await this.assertParticipant(conversationId, userId);
 
     const limit = query.limit ?? 50;
@@ -253,6 +412,9 @@ export class ChatService {
       if (ref) {
         qb.andWhere('m.created_at < :refDate', { refDate: ref.createdAt });
       }
+    } else if (query.page && query.page > 1) {
+      const skip = (query.page - 1) * limit;
+      qb.skip(skip);
     }
 
     if (query.after) {
@@ -266,7 +428,14 @@ export class ChatService {
     const hasMore = messages.length > limit;
     if (hasMore) messages.pop();
 
-    return { data: messages.reverse(), hasMore };
+    const senderIds = messages.map(m => m.senderId);
+    const profileMap = await this.fetchProfilesMap(senderIds);
+
+    const enrichedData = await Promise.all(
+      messages.map((msg) => this.mapMessage(msg, userId, profileMap)),
+    );
+
+    return { data: enrichedData.reverse(), hasMore };
   }
 
   async editMessage(
@@ -439,6 +608,21 @@ export class ChatService {
 
     if (!p1) return null;
     return this.conversationRepo.findOne({ where: { id: p1.conversationId } });
+  }
+
+  async isParticipant(conversationId: string, userId: string): Promise<boolean> {
+    const participant = await this.participantRepo.findOne({
+      where: { conversationId, userId, isActive: true },
+    });
+    return !!participant;
+  }
+
+  async getUserConversationIds(userId: string): Promise<string[]> {
+    const participations = await this.participantRepo.find({
+      where: { userId, isActive: true },
+      select: ['conversationId'],
+    });
+    return participations.map((p) => p.conversationId);
   }
 
   // ──────────────────────────────────────────────────────────────────

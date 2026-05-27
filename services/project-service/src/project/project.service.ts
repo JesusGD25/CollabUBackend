@@ -27,7 +27,7 @@ import {
 } from './dto';
 
 export interface PaginatedProjectsResponse {
-  data: Project[];
+  data: any[]; // Usamos any para permitir el mapeo de tags a strings en la respuesta
   meta: {
     total: number;
     page: number;
@@ -59,9 +59,21 @@ export class ProjectService {
     private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
+  /**
+   * Formatea un proyecto para la respuesta de la API, 
+   * convirtiendo la relación de tags en un array de strings.
+   */
+  private formatProject(project: Project): any {
+    if (!project) return null;
+    return {
+      ...project,
+      tags: project.tags?.map((t: any) => (typeof t === 'string' ? t : t.tag)) || [],
+    };
+  }
+
   // ── PROYECTOS ──
 
-  async createProject(userId: string, companyId: string, dto: CreateProjectDto): Promise<Project> {
+  async createProject(userId: string, companyId: string, dto: CreateProjectDto): Promise<any> {
     // Verificar que la empresa existe y está verificada
     try {
       const companyCheck = await this.httpClient.get<{ exists: boolean; isActive: boolean; isVerified: boolean }>(
@@ -87,6 +99,9 @@ export class ProjectService {
       this.logger.warn(`No se pudo verificar la empresa ${companyId}: ${error.message}`);
     }
 
+    this.validateDates(dto.startDate, dto.endDate, dto.applicationDeadline);
+    this.validateHours(dto.weeklyHours, dto.totalHours);
+
     const project = this.projectRepo.create({
       companyId,
       createdByUserId: userId,
@@ -95,6 +110,8 @@ export class ProjectService {
       shortDescription: dto.shortDescription,
       projectType: dto.projectType,
       durationMonths: dto.durationMonths,
+      weeklyHours: dto.weeklyHours,
+      totalHours: dto.totalHours,
       startDate: dto.startDate ? new Date(dto.startDate) : undefined,
       endDate: dto.endDate ? new Date(dto.endDate) : undefined,
       locationType: dto.locationType,
@@ -103,7 +120,7 @@ export class ProjectService {
       compensationAmount: dto.compensationAmount,
       positionsAvailable: dto.positionsAvailable,
       applicationDeadline: dto.applicationDeadline ? new Date(dto.applicationDeadline) : undefined,
-      academicProgram: dto.academicProgram,
+      academicPrograms: dto.academicPrograms,
       minimumSemester: dto.minimumSemester,
     });
 
@@ -129,10 +146,47 @@ export class ProjectService {
     );
 
     this.logger.log(`Proyecto creado: ${saved.id} por usuario ${userId}`);
-    return this.getProjectById(saved.id);
+    const fullProject = await this.getProjectEntityById(saved.id);
+    return this.formatProject(fullProject);
   }
 
-  async getProjectById(projectId: string, incrementViews = false): Promise<Project> {
+  private validateDates(start?: Date | string, end?: Date | string, deadline?: Date | string) {
+    if (!start) return;
+    const startDt = new Date(start);
+    if (end && new Date(end) <= startDt) {
+      throw new BadRequestException('La fecha de fin debe ser posterior a la fecha de inicio');
+    }
+    if (deadline && new Date(deadline) >= startDt) {
+      throw new BadRequestException('La fecha límite de aplicaciones debe ser anterior a la fecha de inicio');
+    }
+  }
+
+  private validateHours(weeklyHours?: number, totalHours?: number) {
+    if (weeklyHours !== undefined && weeklyHours !== null && weeklyHours <= 0) {
+      throw new BadRequestException('Las horas semanales deben ser mayores a 0');
+    }
+    if (totalHours !== undefined && totalHours !== null && totalHours <= 0) {
+      throw new BadRequestException('Las horas totales deben ser mayores a 0');
+    }
+    if (
+      weeklyHours !== undefined &&
+      weeklyHours !== null &&
+      totalHours !== undefined &&
+      totalHours !== null &&
+      totalHours < weeklyHours
+    ) {
+      throw new BadRequestException(
+        'Las horas totales no pueden ser menores a las horas semanales',
+      );
+    }
+  }
+
+  async getProjectById(projectId: string, incrementViews = false): Promise<any> {
+    const project = await this.getProjectEntityById(projectId, incrementViews);
+    return this.formatProject(project);
+  }
+
+  private async getProjectEntityById(projectId: string, incrementViews = false): Promise<Project> {
     const project = await this.projectRepo.findOne({
       where: { id: projectId },
       relations: ['requirements', 'deliverables', 'tags', 'activities'],
@@ -155,7 +209,7 @@ export class ProjectService {
     return project;
   }
 
-  async getProjectBySlug(slug: string): Promise<Project> {
+  async getProjectBySlug(slug: string): Promise<any> {
     const project = await this.projectRepo.findOne({
       where: { slug },
       relations: ['requirements', 'deliverables', 'tags'],
@@ -163,16 +217,27 @@ export class ProjectService {
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado');
     }
-    return project;
+    return this.formatProject(project);
   }
 
-  async updateProject(projectId: string, userId: string, dto: UpdateProjectDto): Promise<Project> {
-    const project = await this.getProjectById(projectId);
+  async updateProject(projectId: string, userId: string, dto: UpdateProjectDto): Promise<any> {
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     if (project.status !== ProjectStatus.DRAFT && project.status !== ProjectStatus.PUBLISHED) {
       throw new BadRequestException('Solo se pueden editar proyectos en estado draft o published');
     }
+
+    this.validateDates(
+      dto.startDate || project.startDate,
+      dto.endDate || project.endDate,
+      dto.applicationDeadline || project.applicationDeadline,
+    );
+
+    this.validateHours(
+      dto.weeklyHours !== undefined ? dto.weeklyHours : project.weeklyHours,
+      dto.totalHours !== undefined ? dto.totalHours : project.totalHours,
+    );
 
     // Procesar tags separadamente
     if (dto.tags !== undefined) {
@@ -184,7 +249,14 @@ export class ProjectService {
         await this.tagRepo.save(tags);
       }
       delete dto.tags;
+      // Prevenir que typeorm intente actualizar tags eliminados
+      delete (project as any).tags;
     }
+
+    // Prevenir problemas similares con otras relaciones
+    delete (project as any).requirements;
+    delete (project as any).deliverables;
+    delete (project as any).activities;
 
     Object.assign(project, dto);
     await this.projectRepo.save(project);
@@ -195,15 +267,16 @@ export class ProjectService {
       'project-service',
     );
 
-    return this.getProjectById(projectId);
+    const updated = await this.getProjectEntityById(projectId);
+    return this.formatProject(updated);
   }
 
   async updateProjectStatus(
     projectId: string,
     userId: string,
     dto: UpdateProjectStatusDto,
-  ): Promise<Project> {
-    const project = await this.getProjectById(projectId);
+  ): Promise<any> {
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const validTransitions = VALID_TRANSITIONS[project.status];
@@ -258,11 +331,11 @@ export class ProjectService {
     }
 
     this.logger.log(`Estado del proyecto ${projectId} cambiado: ${previousStatus} → ${dto.status}`);
-    return project;
+    return this.formatProject(project);
   }
 
   async deleteProject(projectId: string, userId: string, isAdmin = false): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     if (!isAdmin) {
       this.verifyOwnership(project, userId);
     }
@@ -308,7 +381,7 @@ export class ProjectService {
 
     if (query.search) {
       qb.andWhere(
-        '(project.title ILIKE :search OR project.description ILIKE :search OR project.academicProgram ILIKE :search)',
+        '(project.title ILIKE :search OR project.description ILIKE :search OR project.academicPrograms ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
@@ -322,7 +395,7 @@ export class ProjectService {
     }
 
     if (query.academicProgram) {
-      qb.andWhere('project.academicProgram ILIKE :program', {
+      qb.andWhere('project.academicPrograms ILIKE :program', {
         program: `%${query.academicProgram}%`,
       });
     }
@@ -360,7 +433,7 @@ export class ProjectService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data,
+      data: data.map((p) => this.formatProject(p)),
       meta: {
         total,
         page,
@@ -388,7 +461,7 @@ export class ProjectService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data,
+      data: data.map((p) => this.formatProject(p)),
       meta: {
         total,
         page,
@@ -430,7 +503,7 @@ export class ProjectService {
   // ── REQUISITOS ──
 
   async getRequirements(projectId: string): Promise<ProjectRequirement[]> {
-    await this.getProjectById(projectId); // verifica existencia
+    await this.getProjectEntityById(projectId); // verifica existencia
     return this.requirementRepo.find({
       where: { projectId },
       order: { displayOrder: 'ASC', createdAt: 'ASC' },
@@ -442,7 +515,7 @@ export class ProjectService {
     userId: string,
     dto: AddProjectRequirementDto,
   ): Promise<ProjectRequirement> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const requirement = this.requirementRepo.create({ ...dto, projectId });
@@ -455,7 +528,7 @@ export class ProjectService {
     userId: string,
     dto: Partial<AddProjectRequirementDto>,
   ): Promise<ProjectRequirement> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const requirement = await this.requirementRepo.findOne({
@@ -470,7 +543,7 @@ export class ProjectService {
   }
 
   async deleteRequirement(projectId: string, requirementId: string, userId: string): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const requirement = await this.requirementRepo.findOne({
@@ -486,7 +559,7 @@ export class ProjectService {
   // ── ENTREGABLES ──
 
   async getDeliverables(projectId: string): Promise<ProjectDeliverable[]> {
-    await this.getProjectById(projectId);
+    await this.getProjectEntityById(projectId);
     return this.deliverableRepo.find({
       where: { projectId },
       order: { displayOrder: 'ASC', createdAt: 'ASC' },
@@ -498,7 +571,7 @@ export class ProjectService {
     userId: string,
     dto: AddProjectDeliverableDto,
   ): Promise<ProjectDeliverable> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const deliverable = this.deliverableRepo.create({ ...dto, projectId });
@@ -511,7 +584,7 @@ export class ProjectService {
     userId: string,
     dto: Partial<AddProjectDeliverableDto>,
   ): Promise<ProjectDeliverable> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const deliverable = await this.deliverableRepo.findOne({
@@ -526,7 +599,7 @@ export class ProjectService {
   }
 
   async deleteDeliverable(projectId: string, deliverableId: string, userId: string): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const deliverable = await this.deliverableRepo.findOne({
@@ -542,7 +615,7 @@ export class ProjectService {
   // ── TAGS ──
 
   async addTags(projectId: string, userId: string, tags: string[]): Promise<ProjectTag[]> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const newTags: ProjectTag[] = [];
@@ -558,7 +631,7 @@ export class ProjectService {
   }
 
   async deleteTag(projectId: string, tagId: string, userId: string): Promise<void> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const tag = await this.tagRepo.findOne({ where: { id: tagId, projectId } });
@@ -572,7 +645,7 @@ export class ProjectService {
   // ── ACTIVIDADES ──
 
   async getActivities(projectId: string): Promise<ProjectActivity[]> {
-    await this.getProjectById(projectId);
+    await this.getProjectEntityById(projectId);
     return this.activityRepo.find({
       where: { projectId },
       order: { dueDate: 'ASC', createdAt: 'DESC' },
@@ -584,7 +657,7 @@ export class ProjectService {
     userId: string,
     dto: CreateActivityDto,
   ): Promise<ProjectActivity> {
-    const project = await this.getProjectById(projectId);
+    const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
     const activity = this.activityRepo.create({
@@ -608,7 +681,7 @@ export class ProjectService {
     activityId: string,
     dto: UpdateActivityDto,
   ): Promise<ProjectActivity> {
-    await this.getProjectById(projectId);
+    await this.getProjectEntityById(projectId);
 
     const activity = await this.activityRepo.findOne({
       where: { id: activityId, projectId },
@@ -635,7 +708,7 @@ export class ProjectService {
     return {
       projectId: project.id,
       projectType: project.projectType,
-      academicProgram: project.academicProgram,
+      academicPrograms: project.academicPrograms,
       minimumSemester: project.minimumSemester,
       locationType: project.locationType,
       requirements: (project.requirements || []).map((r) => ({
@@ -680,3 +753,4 @@ export class ProjectService {
     }
   }
 }
+

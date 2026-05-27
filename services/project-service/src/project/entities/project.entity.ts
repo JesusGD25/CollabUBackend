@@ -18,6 +18,7 @@ export enum ProjectType {
   PROFESSIONAL_PRACTICE = 'professional_practice',
   THESIS = 'thesis',
   RESEARCH = 'research',
+  OTHER = 'other',
 }
 
 export enum ProjectStatus {
@@ -73,6 +74,12 @@ export class Project {
   @Column({ name: 'duration_months', nullable: true })
   durationMonths: number;
 
+  @Column({ name: 'weekly_hours', type: 'int', nullable: true })
+  weeklyHours: number;
+
+  @Column({ name: 'total_hours', type: 'int', nullable: true })
+  totalHours: number;
+
   @Column({ name: 'start_date', type: 'date', nullable: true })
   startDate: Date;
 
@@ -103,8 +110,8 @@ export class Project {
   @Column({ name: 'application_deadline', type: 'date', nullable: true })
   applicationDeadline: Date;
 
-  @Column({ name: 'academic_program', nullable: true })
-  academicProgram: string;
+  @Column({ name: 'academic_programs', type: 'simple-array', nullable: true })
+  academicPrograms: string[];
 
   @Column({ name: 'minimum_semester', nullable: true })
   minimumSemester: number;
