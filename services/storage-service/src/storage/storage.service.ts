@@ -222,7 +222,7 @@ export class StorageService {
     if (!file || file.status === FileStatus.DELETED) {
       throw new NotFoundException('Archivo no encontrado');
     }
-    if (!file.isPublic && file.ownerId !== userId) {
+    if (!file.isPublic && file.category !== FileCategory.CV && file.category !== FileCategory.PORTFOLIO && file.ownerId !== userId) {
       throw new ForbiddenException('No tienes acceso a este archivo');
     }
     if (!fs.existsSync(file.storagePath)) {
