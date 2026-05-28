@@ -35,8 +35,11 @@ export class ProxyMiddleware implements NestMiddleware {
               proxyReq.setHeader('x-user-role', req.headers['x-user-role']);
             }
 
-            // Re-serializar el body si ya fue parseado por Express
-            if (req.body && Object.keys(req.body).length > 0) {
+            // Re-serializar el body si ya fue parseado por Express y no es multipart/form-data
+            const contentType = req.headers['content-type'] || '';
+            const isMultipart = contentType.includes('multipart/form-data');
+
+            if (req.body && Object.keys(req.body).length > 0 && !isMultipart) {
               const bodyData = JSON.stringify(req.body);
               proxyReq.setHeader('Content-Type', 'application/json');
               proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));

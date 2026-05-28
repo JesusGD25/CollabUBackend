@@ -101,7 +101,7 @@ export class StorageService {
 
     // Check quota
     const quota = await this.getOrCreateQuota(userId);
-    if (quota.usedStorageBytes + file.size > quota.maxStorageBytes) {
+    if (Number(quota.usedStorageBytes) + file.size > Number(quota.maxStorageBytes)) {
       throw new BadRequestException('Cuota de almacenamiento excedida');
     }
     if (quota.totalFiles >= quota.maxFiles) {
