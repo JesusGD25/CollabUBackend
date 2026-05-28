@@ -28,6 +28,7 @@ export class GatewayAuthMiddleware implements NestMiddleware {
     /^\/api\/v1\/evaluations\/company\/[a-f0-9-]+$/,
     /^\/api\/v1\/evaluations\/student\/[a-f0-9-]+$/,
     /^\/api\/v1\/evaluations\/criteria$/,
+    /^\/api\/v1\/storage\/files\/[a-f0-9-]+\/download$/,
   ];
 
   async use(req: Request, res: Response, next: NextFunction) {
