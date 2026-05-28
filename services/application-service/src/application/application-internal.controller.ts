@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, ParseUUIDPipe, Query } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, ParseUUIDPipe, Query, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { ApplicationService } from './application.service';
 import { ApplicationQueryDto } from './dto';
@@ -39,5 +39,12 @@ export class ApplicationInternalController {
   async withdrawAllByStudent(@Param('studentId', ParseUUIDPipe) studentId: string) {
     await this.applicationService.withdrawAllByStudent(studentId);
     return { message: `Postulaciones retiradas para el estudiante ${studentId}` };
+  }
+
+  @Patch(':id/start-progress')
+  @HttpCode(HttpStatus.OK)
+  async startInProgress(@Param('id', ParseUUIDPipe) id: string) {
+    await this.applicationService.startInProgress(id);
+    return { message: 'Postulación iniciada correctamente' };
   }
 }

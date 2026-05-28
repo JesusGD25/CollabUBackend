@@ -47,8 +47,11 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
   ],
   [ApplicationStatus.INTERVIEW]: [ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED],
   [ApplicationStatus.ACCEPTED]: [
+    ApplicationStatus.PENDING_SUPERVISOR,
+    ApplicationStatus.CANCELLED,
+  ],
+  [ApplicationStatus.PENDING_SUPERVISOR]: [
     ApplicationStatus.IN_PROGRESS,
-    ApplicationStatus.COMPLETED,
     ApplicationStatus.CANCELLED,
   ],
   [ApplicationStatus.IN_PROGRESS]: [
@@ -287,6 +290,100 @@ export class ApplicationService {
     });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // ADMIN — Asignación de supervisores
+  // ──────────────────────────────────────────────────────────────────
+
+  async getAdminPendingApplications(
+    query: { page?: number; limit?: number; search?: string },
+  ): Promise<{ data: any[]; total: number; page: number; limit: number; totalPages: number }> {
+    const { page = 1, limit = 10 } = query;
+
+    const [applications, total] = await this.applicationRepo.findAndCount({
+      where: { status: ApplicationStatus.ACCEPTED },
+      order: { acceptedAt: 'ASC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    if (applications.length === 0) {
+      return { data: [], total, page, limit, totalPages: 0 };
+    }
+
+    // Enrich: student names from user-service
+    const studentIds = [...new Set(applications.map((a) => a.studentId))];
+    let userProfiles: { userId: string; firstName: string; lastName: string }[] = [];
+    try {
+      userProfiles = await this.httpClient.post<{ userId: string; firstName: string; lastName: string }[]>(
+        'user',
+        '/internal/users/batch-basic',
+        { userIds: studentIds },
+      );
+    } catch (err) {
+      this.logger.warn(`No se pudo obtener perfiles de estudiantes: ${err.message}`);
+    }
+
+    // Enrich: project titles from project-service
+    const projectIds = [...new Set(applications.map((a) => a.projectId))];
+    let projectInfos: { id: string; title: string; companyId: string }[] = [];
+    try {
+      projectInfos = await this.httpClient.post<{ id: string; title: string; companyId: string }[]>(
+        'project',
+        '/internal/projects/batch-basic',
+        { projectIds },
+      );
+    } catch (err) {
+      this.logger.warn(`No se pudo obtener info de proyectos: ${err.message}`);
+    }
+
+    const userMap = new Map(userProfiles.map((u) => [u.userId, u]));
+    const projectMap = new Map(projectInfos.map((p) => [p.id, p]));
+
+    const data = applications.map((app) => {
+      const user = userMap.get(app.studentId);
+      const project = projectMap.get(app.projectId);
+      return {
+        id: app.id,
+        projectId: app.projectId,
+        studentId: app.studentId,
+        status: app.status,
+        matchScore: app.matchScore,
+        appliedAt: app.appliedAt,
+        acceptedAt: app.acceptedAt,
+        studentName: user ? `${user.firstName} ${user.lastName}` : app.studentId,
+        projectTitle: project?.title ?? app.projectId,
+        companyId: project?.companyId ?? null,
+      };
+    });
+
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async startInProgress(applicationId: string): Promise<void> {
+    const application = await this.applicationRepo.findOne({ where: { id: applicationId } });
+    if (!application) throw new NotFoundException(`Postulación ${applicationId} no encontrada`);
+
+    const previousStatus = application.status;
+    application.status = ApplicationStatus.IN_PROGRESS;
+    await this.applicationRepo.save(application);
+
+    await this.addTimelineEntry(
+      applicationId,
+      previousStatus,
+      ApplicationStatus.IN_PROGRESS,
+      'system',
+      'Supervisor académico asignado — Proyecto iniciado',
+    );
+
+    await this.eventPublisher.publish('application.started', {
+      applicationId,
+      projectId: application.projectId,
+      studentId: application.studentId,
+    }, 'application-service');
+
+    this.logger.log(`Postulación ${applicationId} iniciada (supervisor asignado)`);
+  }
+
   async updateStatus(
     applicationId: string,
     companyUserId: string,
@@ -319,6 +416,13 @@ export class ApplicationService {
     }
     if (dto.status === ApplicationStatus.ACCEPTED) {
       application.acceptedAt = new Date();
+      // Notify student that application is accepted and pending supervisor assignment
+      await this.eventPublisher.publish('application.company.accepted', {
+        applicationId,
+        projectId: application.projectId,
+        studentId: application.studentId,
+        changedBy: companyUserId,
+      }, 'application-service');
     }
     if (dto.status === ApplicationStatus.COMPLETED) {
       application.completedAt = new Date();

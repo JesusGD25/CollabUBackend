@@ -409,4 +409,63 @@ export class CompanyService {
       await this.publishProfileUpdated(profile);
     }
   }
+
+  // ── ADMIN ──
+
+  async getAdminCompanies(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: string;
+  }) {
+    const page  = Math.max(1, Number(query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+
+    const qb = this.profileRepo
+      .createQueryBuilder('c')
+      .leftJoinAndSelect('c.contacts',      'contact')
+      .leftJoinAndSelect('c.businessAreas', 'area')
+      .orderBy('c.createdAt', 'DESC');
+
+    if (query.search) {
+      qb.andWhere('(c.companyName ILIKE :s OR c.nit ILIKE :s OR c.industry ILIKE :s)',
+        { s: `%${query.search}%` });
+    }
+    if (query.status) {
+      qb.andWhere('c.verificationStatus = :status', { status: query.status });
+    } else {
+      // Por defecto sólo pendientes
+      qb.andWhere('c.verificationStatus = :status', { status: VerificationStatus.PENDING });
+    }
+
+    const [data, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
+    return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+  }
+
+  async reviewCompany(
+    companyId: string,
+    action: 'approve' | 'reject' | 'suspend',
+    reason?: string,
+  ) {
+    const company = await this.profileRepo.findOne({ where: { id: companyId } });
+    if (!company) throw new NotFoundException('Empresa no encontrada');
+
+    const statusMap: Record<string, VerificationStatus> = {
+      approve:  VerificationStatus.VERIFIED,
+      reject:   VerificationStatus.REJECTED,
+      suspend:  VerificationStatus.SUSPENDED,
+    };
+    company.verificationStatus = statusMap[action];
+    await this.profileRepo.save(company);
+
+    await this.eventPublisher.publish('company.verification.updated', {
+      userId:             company.userId,
+      companyId:          company.id,
+      verificationStatus: company.verificationStatus,
+      reason,
+    }, 'company-service');
+
+    this.logger.log(`Empresa ${companyId} → ${action} por admin`);
+    return company;
+  }
 }

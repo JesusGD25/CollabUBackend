@@ -56,6 +56,13 @@ export class ApplicationController {
     return this.applicationService.createApplication(user.id, dto);
   }
 
+  @Get('admin/pending')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Listar postulaciones aceptadas pendientes de asignar supervisor' })
+  getAdminPending(@Query() query: ApplicationQueryDto) {
+    return this.applicationService.getAdminPendingApplications(query);
+  }
+
   @Get('my')
   @Roles(UserRole.STUDENT)
   @ApiOperation({ summary: 'Ver mis postulaciones' })
