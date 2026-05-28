@@ -178,7 +178,8 @@ $servicios = @(
     "notification-service",
     "chat-service",
     "admin-service",
-    "storage-service"
+    "storage-service",
+    "analytics-service"
 )
 
 foreach ($svc in $servicios) {
@@ -219,10 +220,13 @@ foreach ($svc in $servicios) {
 # Ejecutar desde: C:\...\CollabU\Backend
 $servicios = @(
     "application-service",
+    "matching-service",
     "evaluation-service",
     "notification-service",
     "chat-service",
-    "storage-service"
+    "admin-service",
+    "storage-service",
+    "analytics-service"
 )
 
 foreach ($svc in $servicios) {

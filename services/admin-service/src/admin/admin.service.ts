@@ -1,12 +1,13 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere, IsNull } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { AcademicPeriod, PeriodStatus } from './entities/academic-period.entity';
 import { AcademicProgram } from './entities/academic-program.entity';
@@ -29,6 +30,8 @@ import {
 
 @Injectable()
 export class AdminService {
+  private readonly logger = new Logger(AdminService.name);
+
   constructor(
     @InjectRepository(AcademicPeriod)
     private readonly periodRepo: Repository<AcademicPeriod>,
@@ -49,6 +52,7 @@ export class AdminService {
     private readonly settingRepo: Repository<SystemSetting>,
 
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
   // ─── Dashboard ──────────────────────────────────────────────────────────────
@@ -233,10 +237,35 @@ export class AdminService {
     return this.supervisorRepo.save(supervisor);
   }
 
-  async getSupervisors(isActive?: boolean): Promise<Supervisor[]> {
+  async getSupervisors(isActive?: boolean): Promise<any[]> {
     const where: FindOptionsWhere<Supervisor> = {};
     if (isActive !== undefined) where.isActive = isActive;
-    return this.supervisorRepo.find({ where, order: { createdAt: 'DESC' } });
+    const supervisors = await this.supervisorRepo.find({ where, order: { createdAt: 'DESC' } });
+
+    if (!supervisors.length) return [];
+
+    const userIds = supervisors.map((s) => s.userId);
+    let userProfiles: { userId: string; firstName: string; lastName: string }[] = [];
+    try {
+      userProfiles = await this.httpClient.post<{ userId: string; firstName: string; lastName: string }[]>(
+        'user',
+        '/internal/users/batch-basic',
+        { userIds },
+      );
+    } catch (err) {
+      this.logger.warn(`No se pudo obtener nombres de supervisores: ${err.message}`);
+    }
+    const userMap = new Map(userProfiles.map((u) => [u.userId, u]));
+
+    return supervisors.map((s) => {
+      const user = userMap.get(s.userId);
+      return {
+        ...s,
+        firstName: user?.firstName ?? null,
+        lastName: user?.lastName ?? null,
+        fullName: user ? `${user.firstName} ${user.lastName}` : null,
+      };
+    });
   }
 
   async getSupervisorById(id: string): Promise<Supervisor> {
@@ -272,6 +301,16 @@ export class AdminService {
 
     // Update supervisor student count
     await this.supervisorRepo.increment({ id: dto.supervisorId }, 'currentStudents', 1);
+
+    // Notify application-service to start IN_PROGRESS
+    this.httpClient
+      .patch('application', `/internal/applications/${dto.applicationId}/start-progress`, {})
+      .catch((err) => this.logger.warn(`No se pudo iniciar postulación ${dto.applicationId}: ${err.message}`));
+
+    // Notify project-service to start IN_PROGRESS
+    this.httpClient
+      .patch('project', `/internal/projects/${dto.projectId}/start-progress`, {})
+      .catch((err) => this.logger.warn(`No se pudo iniciar proyecto ${dto.projectId}: ${err.message}`));
 
     await this.eventPublisher.publish(
       'admin.supervisor.assigned',

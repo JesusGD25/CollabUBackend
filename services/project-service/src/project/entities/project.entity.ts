@@ -23,6 +23,7 @@ export enum ProjectType {
 
 export enum ProjectStatus {
   DRAFT = 'draft',
+  PENDING_APPROVAL = 'pending_approval',
   PUBLISHED = 'published',
   IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',

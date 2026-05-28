@@ -519,4 +519,135 @@ export class AuthService {
     }
     return { role: user.role };
   }
+
+  // ─── CREATE USER (admin) ──────────────────────────────────────────
+  async createAdminUser(data: {
+    email: string;
+    password: string;
+    role: string;
+  }): Promise<Partial<User>> {
+    const existing = await this.userRepo.findOne({ where: { email: data.email } });
+    if (existing) throw new ConflictException('El email ya está registrado');
+
+    if (!Object.values(UserRole).includes(data.role as UserRole)) {
+      throw new BadRequestException('Rol inválido');
+    }
+
+    const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
+    const user = this.userRepo.create({
+      email: data.email,
+      passwordHash,
+      role: data.role as UserRole,
+      isVerified: true,   // creado por admin, no requiere verificación por email
+      isActive: true,
+    });
+    const saved = await this.userRepo.save(user);
+    this.logger.log(`Usuario ${saved.id} (${saved.email}) creado por admin`);
+
+    return {
+      id: saved.id,
+      email: saved.email,
+      role: saved.role,
+      isActive: saved.isActive,
+      isVerified: saved.isVerified,
+      lastLogin: saved.lastLogin,
+      createdAt: saved.createdAt,
+    };
+  }
+
+  // ─── UPDATE USER (admin) ──────────────────────────────────────────
+  async updateAdminUser(
+    id: string,
+    data: { isActive?: boolean; role?: string; email?: string; password?: string },
+  ): Promise<Partial<User>> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    const updateData: Partial<User> = {};
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
+    if (data.role && Object.values(UserRole).includes(data.role as UserRole)) {
+      updateData.role = data.role as UserRole;
+    }
+    if (data.email && data.email !== user.email) {
+      const taken = await this.userRepo.findOne({ where: { email: data.email } });
+      if (taken) throw new ConflictException('El email ya está en uso');
+      updateData.email = data.email;
+      // Al cambiar email, se revoca sesión activa por seguridad
+      await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    }
+    if (data.password) {
+      updateData.passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
+      await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    }
+
+    await this.userRepo.update(id, updateData);
+
+    const updated = await this.userRepo
+      .createQueryBuilder('user')
+      .select(['user.id', 'user.email', 'user.role', 'user.isActive', 'user.isVerified', 'user.lastLogin', 'user.createdAt'])
+      .where('user.id = :id', { id })
+      .getOne();
+
+    this.logger.log(`Usuario ${id} actualizado por admin`);
+    return updated!;
+  }
+
+  // ─── DELETE USER (admin) ──────────────────────────────────────────
+  async deleteAdminUser(id: string): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    // Revocar tokens antes de eliminar (cascade debería hacerlo, pero por seguridad)
+    await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    await this.userRepo.delete(id);
+    this.logger.log(`Usuario ${id} (${user.email}) eliminado por admin`);
+  }
+
+  // ─── LIST ALL USERS (admin) ────────────────────────────────────────
+  async getAdminUsers(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    role?: string;
+    isActive?: string;
+  }): Promise<{
+    data: Partial<User>[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+    const skip = (page - 1) * limit;
+
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.email',
+        'user.role',
+        'user.isActive',
+        'user.isVerified',
+        'user.lastLogin',
+        'user.createdAt',
+      ])
+      .orderBy('user.createdAt', 'DESC');
+
+    if (query.search) {
+      qb.andWhere('user.email ILIKE :search', { search: `%${query.search}%` });
+    }
+
+    if (query.role) {
+      qb.andWhere('user.role = :role', { role: query.role });
+    }
+
+    if (query.isActive !== undefined && query.isActive !== '') {
+      qb.andWhere('user.isActive = :isActive', { isActive: query.isActive === 'true' });
+    }
+
+    const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    return {
+      data,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
 }

@@ -1,8 +1,10 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Param,
+  Body,
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
@@ -49,5 +51,23 @@ export class ProjectInternalController {
   @ApiResponse({ status: 200, description: 'IDs de proyectos obtenidos' })
   async getProjectIdsByCompany(@Param('companyId', ParseUUIDPipe) companyId: string) {
     return this.projectService.getProjectIdsByCompany(companyId);
+  }
+
+  @Post('batch-basic')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Obtener info básica de múltiples proyectos (uso interno)' })
+  @ApiResponse({ status: 200, description: 'Info básica de proyectos' })
+  async getProjectsBatch(@Body() body: { projectIds: string[] }) {
+    return this.projectService.getProjectsBatch(body.projectIds);
+  }
+
+  @Patch(':projectId/start-progress')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Iniciar proyecto tras asignación de supervisor (uso interno)' })
+  @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Proyecto iniciado' })
+  async startProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
+    await this.projectService.startProject(projectId);
+    return { message: 'Proyecto iniciado correctamente' };
   }
 }
