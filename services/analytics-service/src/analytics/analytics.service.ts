@@ -48,9 +48,10 @@ export class AnalyticsService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [latestPlatform, topSkills, recentReports] = await Promise.all([
-      this.platformMetricsRepo.findOne({
+    const [latestPlatformArr, topSkills, recentReports] = await Promise.all([
+      this.platformMetricsRepo.find({
         order: { snapshotDate: 'DESC' },
+        take: 1,
       }),
       this.skillTrendRepo.find({
         order: { demandCount: 'DESC' },
@@ -65,12 +66,16 @@ export class AnalyticsService {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const [platformThisMonth] = await Promise.all([
-      this.platformMetricsRepo.findOne({
+    const [platformThisMonthArr] = await Promise.all([
+      this.platformMetricsRepo.find({
         where: { snapshotDate: MoreThanOrEqual(thirtyDaysAgo) as any },
         order: { snapshotDate: 'ASC' },
+        take: 1,
       }),
     ]);
+
+    const latestPlatform = latestPlatformArr[0] ?? null;
+    const platformThisMonth = platformThisMonthArr[0] ?? null;
 
     const newUsersThisMonth =
       latestPlatform && platformThisMonth
