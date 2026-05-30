@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsDateString,
   IsInt,
+  IsBoolean,
   Min,
   MaxLength,
 } from 'class-validator';
@@ -37,6 +38,11 @@ export class CreateAcademicPeriodDto {
   @IsOptional()
   @IsDateString()
   enrollmentEnd?: string;
+
+  @ApiPropertyOptional({ default: false })
+  @IsOptional()
+  @IsBoolean()
+  isCurrent?: boolean;
 
   @ApiPropertyOptional({ default: 10 })
   @IsOptional()
