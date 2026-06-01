@@ -41,7 +41,7 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Post()
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear una evaluación pendiente' })
   @ApiResponse({ status: 201, description: 'Evaluación creada' })
@@ -51,21 +51,21 @@ export class EvaluationController {
   }
 
   @Get('my/as-evaluator')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver mis evaluaciones como evaluador' })
   getMyEvaluations(@CurrentUser() user: any, @Query() query: EvaluationQueryDto) {
     return this.evaluationService.findByEvaluator(user.id, query);
   }
 
   @Get('my/as-evaluated')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver evaluaciones recibidas sobre mí' })
   getEvaluationsAboutMe(@CurrentUser() user: any, @Query() query: EvaluationQueryDto) {
     return this.evaluationService.findByEvaluated(user.id, query);
   }
 
   @Get('criteria')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver criterios de evaluación activos' })
   @ApiQuery({ name: 'evaluationType', required: false, enum: EvaluationType })
   getCriteria(@Query('evaluationType') evaluationType?: EvaluationType) {
@@ -81,7 +81,7 @@ export class EvaluationController {
   }
 
   @Get('templates')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver plantillas de evaluación' })
   @ApiQuery({ name: 'evaluationType', required: false, enum: EvaluationType })
   getTemplates(@Query('evaluationType') evaluationType?: EvaluationType) {
@@ -89,7 +89,7 @@ export class EvaluationController {
   }
 
   @Get('aggregate/:userId')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver puntuaciones agregadas de un usuario evaluado' })
   @ApiParam({ name: 'userId', type: 'string' })
   getAggregateScores(@Param('userId', ParseUUIDPipe) userId: string) {
@@ -97,7 +97,7 @@ export class EvaluationController {
   }
 
   @Get('application/:applicationId')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver evaluaciones de una postulación' })
   @ApiParam({ name: 'applicationId', type: 'string' })
   getByApplication(@Param('applicationId', ParseUUIDPipe) applicationId: string) {
@@ -105,7 +105,7 @@ export class EvaluationController {
   }
 
   @Get(':id')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver detalle de una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -113,7 +113,7 @@ export class EvaluationController {
   }
 
   @Post(':id/submit')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Completar y enviar una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })

@@ -78,7 +78,7 @@ export class ApplicationController {
   }
 
   @Get(':id')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver detalle de una postulación' })
   @ApiParam({ name: 'id', type: 'string' })
   findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -86,7 +86,7 @@ export class ApplicationController {
   }
 
   @Get(':id/timeline')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver historial de cambios de estado' })
   getTimeline(@Param('id', ParseUUIDPipe) id: string) {
     return this.applicationService.getApplicationTimeline(id);
@@ -141,7 +141,7 @@ export class ApplicationController {
   }
 
   @Get(':id/interviews')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver entrevistas de una postulación' })
   getInterviews(@Param('id', ParseUUIDPipe) id: string) {
     return this.applicationService.getInterviews(id);
@@ -211,7 +211,7 @@ export class ApplicationController {
   }
 
   @Get(':id/deliverables')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver entregables de una postulación' })
   getDeliverables(@Param('id', ParseUUIDPipe) id: string) {
     return this.applicationService.getDeliverables(id);
