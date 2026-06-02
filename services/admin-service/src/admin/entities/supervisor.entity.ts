@@ -42,6 +42,9 @@ export class Supervisor {
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 
+  @Column({ name: 'is_onboarding_complete', default: false })
+  isOnboardingComplete: boolean;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

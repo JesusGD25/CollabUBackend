@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Body,
   Param,
   ParseUUIDPipe,
@@ -16,6 +17,7 @@ import {
   ApiOperation,
   ApiBearerAuth,
   ApiQuery,
+  ApiParam,
 } from '@nestjs/swagger';
 import {
   JwtAuthGuard,
@@ -36,6 +38,7 @@ import {
   CreateSupervisorDto,
   UpdateSystemSettingDto,
   PeriodsQueryDto,
+  UpdateSupervisorDto,
 } from './dto';
 
 @ApiTags('Admin')
@@ -180,13 +183,44 @@ export class AdminController {
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'enriched', required: false, type: Boolean })
   getMySupervisedStudents(
     @CurrentUser() user: any,
     @Query('status') status?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('enriched') enriched?: string,
   ) {
+    if (enriched === 'true') {
+      return this.adminService.getMySupervisedStudentsEnriched(user.id, status, page, limit);
+    }
     return this.adminService.getMySupervisedStudents(user.id, status, page, limit);
+  }
+
+  @Get('supervisors/assignments/:id')
+  @Roles(UserRole.FACULTY)
+  @ApiOperation({ summary: 'Obtener detalle de una asignación de supervisor' })
+  @ApiParam({ name: 'id', type: 'string' })
+  getAssignmentById(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+  ) {
+    return this.adminService.getAssignmentById(id, user.id);
+  }
+
+  @Get('supervisors/me')
+  @Roles(UserRole.FACULTY)
+  @ApiOperation({ summary: 'Obtener mi perfil de supervisor' })
+  getMyProfile(@CurrentUser() user: any) {
+    return this.adminService.getMyProfile(user.id);
+  }
+
+  @Patch('supervisors/me')
+  @Roles(UserRole.FACULTY)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Actualizar mi perfil de supervisor' })
+  updateMyProfile(@CurrentUser() user: any, @Body() dto: UpdateSupervisorDto) {
+    return this.adminService.updateMyProfile(user.id, dto);
   }
 
   // ─── System Settings ──────────────────────────────────────────────────────────

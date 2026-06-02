@@ -5,6 +5,7 @@ import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { AdminEventsSubscriber } from './admin-events.subscriber';
 
 import {
   AcademicPeriod,
@@ -30,6 +31,7 @@ import {
   controllers: [AdminController],
   providers: [
     AdminService,
+    AdminEventsSubscriber,
     EventPublisher,
     {
       provide: MicroserviceHttpClient,

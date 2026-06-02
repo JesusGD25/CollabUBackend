@@ -7,3 +7,4 @@ export { AssignSupervisorDto } from './assign-supervisor.dto';
 export { CreateSupervisorDto } from './create-supervisor.dto';
 export { UpdateSystemSettingDto } from './update-system-setting.dto';
 export { PeriodsQueryDto } from './periods-query.dto';
+export { UpdateSupervisorDto } from './update-supervisor.dto';

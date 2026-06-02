@@ -26,6 +26,7 @@ import {
   CreateSupervisorDto,
   UpdateSystemSettingDto,
   PeriodsQueryDto,
+  UpdateSupervisorDto,
 } from './dto';
 
 @Injectable()
@@ -350,6 +351,227 @@ export class AdminService {
     });
 
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getMySupervisedStudentsEnriched(
+    supervisorUserId: string,
+    status?: string,
+    page = 1,
+    limit = 20,
+  ): Promise<{
+    data: any[];
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  }> {
+    const supervisor = await this.supervisorRepo.findOne({ where: { userId: supervisorUserId } });
+    if (!supervisor) {
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+
+    const where: FindOptionsWhere<SupervisorAssignment> = { supervisorId: supervisor.id };
+    if (status) where.status = status;
+
+    const [assignments, total] = await this.assignmentRepo.findAndCount({
+      where,
+      relations: ['supervisor', 'period'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    if (assignments.length === 0) {
+      return { data: [], total, page, limit, totalPages: Math.ceil(total / limit) };
+    }
+
+    const studentIds = [...new Set(assignments.map(a => a.studentId))];
+    const projectIds = [...new Set(assignments.map(a => a.projectId))];
+
+    let studentProfiles: { userId: string; firstName: string; lastName: string; displayName?: string }[] = [];
+    let projectData: { id: string; title: string; companyId: string }[] = [];
+
+    await Promise.all([
+      (async () => {
+        try {
+          studentProfiles = await this.httpClient.post<{ userId: string; firstName: string; lastName: string; displayName?: string }[]>(
+            'user',
+            '/internal/users/batch-basic',
+            { userIds: studentIds },
+          );
+        } catch (err) {
+          this.logger.warn(`No se pudo obtener perfiles de estudiantes: ${err.message}`);
+        }
+      })(),
+      (async () => {
+        try {
+          projectData = await this.httpClient.post<{ id: string; title: string; companyId: string }[]>(
+            'project',
+            '/internal/projects/batch-basic',
+            { projectIds },
+          );
+        } catch (err) {
+          this.logger.warn(`No se pudo obtener datos de proyectos: ${err.message}`);
+        }
+      })(),
+    ]);
+
+    const studentMap = new Map(studentProfiles.map(u => [u.userId, u]));
+    const projectMap = new Map(projectData.map(p => [p.id, p]));
+
+    const companyIds = [...new Set(projectData.map(p => p.companyId))];
+    const companyNames = new Map<string, string>();
+
+    if (companyIds.length > 0) {
+      await Promise.all(
+        companyIds.map(async (companyUserId) => {
+          try {
+            const companyInfo = await this.httpClient.get<{ companyName: string }>(
+              'company',
+              `/internal/companies/${companyUserId}/basic-info`,
+            );
+            companyNames.set(companyUserId, companyInfo.companyName);
+          } catch {
+            companyNames.set(companyUserId, 'Empresa');
+          }
+        })
+      );
+    }
+
+    const enriched = assignments.map(assignment => {
+      const student = studentMap.get(assignment.studentId);
+      const project = projectMap.get(assignment.projectId);
+      const companyName = project ? (companyNames.get(project.companyId) ?? 'Empresa') : 'Empresa';
+
+      const studentName = student
+        ? (student.displayName ?? (`${student.firstName ?? ''} ${student.lastName ?? ''}`.trim() || 'Estudiante'))
+        : 'Estudiante';
+
+      return {
+        ...assignment,
+        studentName,
+        studentCode: null,
+        projectTitle: project?.title ?? 'Proyecto',
+        companyName,
+        status: assignment.status,
+      };
+    });
+
+    return { data: enriched, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  async getAssignmentById(assignmentId: string, supervisorUserId: string): Promise<any> {
+    const supervisor = await this.supervisorRepo.findOne({ where: { userId: supervisorUserId } });
+    if (!supervisor) {
+      throw new NotFoundException('Supervisor no encontrado');
+    }
+
+    const assignment = await this.assignmentRepo.findOne({
+      where: { id: assignmentId, supervisorId: supervisor.id },
+      relations: ['supervisor', 'period'],
+    });
+
+    if (!assignment) {
+      throw new NotFoundException('Asignación no encontrada');
+    }
+
+    const [studentProfile, projectInfo] = await Promise.all([
+      (async () => {
+        try {
+          const profiles = await this.httpClient.post<{ userId: string; firstName: string; lastName: string; displayName?: string }[]>(
+            'user',
+            '/internal/users/batch-basic',
+            { userIds: [assignment.studentId] },
+          );
+          return profiles[0] ?? null;
+        } catch {
+          return null;
+        }
+      })(),
+      (async () => {
+        try {
+          const projects = await this.httpClient.post<{ id: string; title: string; companyId: string }[]>(
+            'project',
+            '/internal/projects/batch-basic',
+            { projectIds: [assignment.projectId] },
+          );
+          return projects[0] ?? null;
+        } catch {
+          return null;
+        }
+      })(),
+    ]);
+
+    let studentDetail: { program?: string; semester?: number } = {};
+    try {
+      const studentData = await this.httpClient.get<{ program?: string; semester?: number }>(
+        'students',
+        `/internal/students/${assignment.studentId}/matching-data`,
+      );
+      studentDetail = { program: studentData.program, semester: studentData.semester };
+    } catch {
+      // ignore
+    }
+
+    let companyName = 'Empresa';
+    if (projectInfo?.companyId) {
+      try {
+        const companyInfo = await this.httpClient.get<{ companyName: string }>(
+          'company',
+          `/internal/companies/${projectInfo.companyId}/basic-info`,
+        );
+        companyName = companyInfo.companyName;
+      } catch {
+        // ignore
+      }
+    }
+
+    const studentName = studentProfile
+      ? (studentProfile.displayName ?? (`${studentProfile.firstName ?? ''} ${studentProfile.lastName ?? ''}`.trim() || 'Estudiante'))
+      : 'Estudiante';
+
+    return {
+      ...assignment,
+      studentName,
+      studentCode: studentDetail.program ?? null,
+      studentProgram: studentDetail.program ?? null,
+      studentSemester: studentDetail.semester ?? null,
+      projectTitle: projectInfo?.title ?? 'Proyecto',
+      companyName,
+    };
+  }
+
+  async getMyProfile(supervisorUserId: string): Promise<Supervisor> {
+    const supervisor = await this.supervisorRepo.findOne({ where: { userId: supervisorUserId } });
+    if (!supervisor) {
+      throw new NotFoundException('Perfil de supervisor no encontrado');
+    }
+    return supervisor;
+  }
+
+  async updateMyProfile(supervisorUserId: string, dto: UpdateSupervisorDto): Promise<Supervisor> {
+    let supervisor = await this.supervisorRepo.findOne({ where: { userId: supervisorUserId } });
+
+    if (!supervisor) {
+      supervisor = this.supervisorRepo.create({ userId: supervisorUserId });
+    }
+
+    Object.assign(supervisor, dto);
+    const saved = await this.supervisorRepo.save(supervisor);
+
+    const isOnboardingReady = !!(supervisor.employeeCode && supervisor.department && supervisor.role);
+
+    await this.eventPublisher.publish(
+      'faculty.profile.updated',
+      {
+        userId: supervisorUserId,
+        supervisorId: supervisor.id,
+        isOnboardingReady,
+      },
+      'admin-service',
+    );
+
+    return saved;
   }
 
   // ─── System Settings ──────────────────────────────────────────────────────────

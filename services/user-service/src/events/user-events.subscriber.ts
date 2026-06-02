@@ -90,5 +90,32 @@ export class UserEventsSubscriber implements OnModuleInit {
         }
       },
     );
+
+    // Escuchar progreso del perfil de faculty para actualizar onboarding en user-service
+    await this.eventSubscriber.subscribe(
+      'user-service.faculty.profile.updated',
+      'faculty.profile.updated',
+      async (event) => {
+        const { userId, isOnboardingReady } = event.data;
+
+        if (typeof userId !== 'string' || typeof isOnboardingReady !== 'boolean') {
+          this.logger.warn('faculty.profile.updated recibido sin payload de onboarding válido');
+          return;
+        }
+
+        try {
+          await this.usersService.setOnboardingStatus(userId, isOnboardingReady);
+        } catch (error: any) {
+          if (error.status === 404) {
+            this.logger.warn(`Perfil base no encontrado para ${userId}; onboarding faculty omitido`);
+            return;
+          }
+          this.logger.error(
+            `Error actualizando onboarding (faculty) para ${userId}: ${error.message}`,
+            error.stack,
+          );
+        }
+      },
+    );
   }
 }
