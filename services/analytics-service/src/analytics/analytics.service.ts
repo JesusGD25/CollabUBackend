@@ -87,6 +87,11 @@ export class AnalyticsService {
         ? latestPlatform.totalProjects - platformThisMonth.totalProjects
         : latestPlatform?.newProjectsPeriod ?? 0;
 
+    const newApplicationsThisMonth =
+      latestPlatform && platformThisMonth
+        ? latestPlatform.totalApplications - platformThisMonth.totalApplications
+        : latestPlatform?.totalApplications ?? 0;
+
     return {
       platformMetrics: {
         totalUsers: latestPlatform?.totalUsers ?? 0,
@@ -95,19 +100,19 @@ export class AnalyticsService {
         totalProjects: latestPlatform?.totalProjects ?? 0,
         activeProjects: latestPlatform?.activeProjects ?? 0,
         totalApplications: latestPlatform?.totalApplications ?? 0,
-        avgMatchScore: latestPlatform?.avgMatchScore ?? null,
+        avgMatchScore: latestPlatform?.avgMatchScore != null ? Number(latestPlatform.avgMatchScore) : null,
       },
       trends: {
         newUsersThisMonth,
         newProjectsThisMonth,
-        applicationsThisMonth: latestPlatform?.newUsersPeriod ?? 0,
+        applicationsThisMonth: newApplicationsThisMonth,
         lastSnapshotDate: latestPlatform?.snapshotDate ?? null,
       },
       topSkills: topSkills.map((s) => ({
         name: s.skillName,
         demand: s.demandCount,
         supply: s.supplyCount,
-        gap: s.gapIndex,
+        gap: s.gapIndex != null ? Number(s.gapIndex) : null,
         trend: s.trendDirection,
       })),
       recentReports: recentReports.map((r) => ({
