@@ -340,4 +340,34 @@ export class ProjectController {
   ) {
     return this.projectService.updateActivity(projectId, actId, dto);
   }
+
+  // ── ADMIN ──
+
+  @Get('admin/pending')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Listar proyectos pendientes de aprobación (solo admin)' })
+  @ApiResponse({ status: 200, description: 'Lista paginada de proyectos pendientes' })
+  async getAdminPendingProjects(
+    @Query('page')   page?:   string,
+    @Query('limit')  limit?:  string,
+    @Query('search') search?: string,
+  ) {
+    return this.projectService.getAdminPendingProjects({ page: Number(page), limit: Number(limit), search });
+  }
+
+  @Patch('admin/:projectId/review')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Aprobar o rechazar un proyecto (solo admin)' })
+  @ApiResponse({ status: 200, description: 'Proyecto revisado' })
+  @ApiResponse({ status: 404, description: 'Proyecto no encontrado' })
+  async reviewProject(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() body: { action: 'approve' | 'reject'; reason?: string },
+  ) {
+    return this.projectService.reviewProject(projectId, body.action, body.reason);
+  }
 }

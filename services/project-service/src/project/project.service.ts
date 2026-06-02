@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Project, ProjectStatus } from './entities/project.entity';
@@ -38,7 +38,8 @@ export interface PaginatedProjectsResponse {
 
 // Transiciones de estado válidas
 const VALID_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
-  [ProjectStatus.DRAFT]: [ProjectStatus.PUBLISHED, ProjectStatus.CANCELLED],
+  [ProjectStatus.DRAFT]: [ProjectStatus.PENDING_APPROVAL, ProjectStatus.CANCELLED],
+  [ProjectStatus.PENDING_APPROVAL]: [ProjectStatus.PUBLISHED, ProjectStatus.DRAFT],
   [ProjectStatus.PUBLISHED]: [ProjectStatus.IN_PROGRESS, ProjectStatus.CANCELLED],
   [ProjectStatus.IN_PROGRESS]: [ProjectStatus.COMPLETED, ProjectStatus.CANCELLED],
   [ProjectStatus.COMPLETED]: [],
@@ -720,6 +721,32 @@ export class ProjectService {
     };
   }
 
+  async getProjectsBatch(projectIds: string[]): Promise<{ id: string; title: string; companyId: string }[]> {
+    if (!projectIds.length) return [];
+    const projects = await this.projectRepo.find({ where: { id: In(projectIds) } });
+    return projects.map((p) => ({ id: p.id, title: p.title, companyId: p.companyId }));
+  }
+
+  async startProject(projectId: string): Promise<void> {
+    const project = await this.projectRepo.findOne({ where: { id: projectId } });
+    if (!project) throw new NotFoundException(`Proyecto ${projectId} no encontrado`);
+
+    if (project.status !== ProjectStatus.PUBLISHED) {
+      this.logger.warn(`Proyecto ${projectId} en estado "${project.status}", no se puede iniciar via asignación`);
+      return;
+    }
+
+    project.status = ProjectStatus.IN_PROGRESS;
+    await this.projectRepo.save(project);
+
+    await this.eventPublisher.publish('project.started', {
+      projectId,
+      companyId: project.companyId,
+    }, 'project-service');
+
+    this.logger.log(`Proyecto ${projectId} iniciado por asignación de supervisor`);
+  }
+
   async projectExists(projectId: string): Promise<{ exists: boolean; companyId: string | null; status: string | null }> {
     const project = await this.projectRepo.findOne({ where: { id: projectId } });
     if (!project) {
@@ -751,6 +778,70 @@ export class ProjectService {
     if (project.createdByUserId !== userId) {
       throw new ForbiddenException('No tienes permisos para modificar este proyecto');
     }
+  }
+
+  // ── ADMIN ──
+
+  async getAdminPendingProjects(query: { page?: number; limit?: number; search?: string }) {
+    const page  = Math.max(1, Number(query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+
+    const qb = this.projectRepo
+      .createQueryBuilder('p')
+      .leftJoinAndSelect('p.tags', 'tag')
+      .where('p.status = :status', { status: ProjectStatus.PENDING_APPROVAL })
+      .orderBy('p.createdAt', 'ASC'); // los más antiguos primero
+
+    if (query.search) {
+      qb.andWhere('(p.title ILIKE :s OR p.description ILIKE :s)', { s: `%${query.search}%` });
+    }
+
+    const [data, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
+    return {
+      data: data.map((p) => this.formatProject(p)),
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async reviewProject(
+    projectId: string,
+    action: 'approve' | 'reject',
+    reason?: string,
+  ) {
+    const project = await this.projectRepo.findOne({ where: { id: projectId } });
+    if (!project) throw new NotFoundException('Proyecto no encontrado');
+    if (project.status !== ProjectStatus.PENDING_APPROVAL) {
+      throw new BadRequestException('El proyecto no está pendiente de aprobación');
+    }
+
+    const newStatus = action === 'approve' ? ProjectStatus.PUBLISHED : ProjectStatus.DRAFT;
+    project.status = newStatus;
+    await this.projectRepo.save(project);
+
+    await this.eventPublisher.publish('project.status.changed', {
+      projectId,
+      companyId:      project.companyId,
+      previousStatus: ProjectStatus.PENDING_APPROVAL,
+      newStatus,
+      reason,
+    }, 'project-service');
+
+    if (action === 'approve') {
+      const requirements = await this.requirementRepo.find({ where: { projectId } });
+      await this.eventPublisher.publish('project.published', {
+        projectId,
+        companyId:    project.companyId,
+        title:        project.title,
+        requirements: requirements.map((r) => ({
+          type:        r.requirementType,
+          name:        r.name,
+          isMandatory: r.isMandatory,
+        })),
+      }, 'project-service');
+    }
+
+    this.logger.log(`Proyecto ${projectId} → ${action} por admin`);
+    return this.formatProject(project);
   }
 }
 

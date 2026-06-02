@@ -48,9 +48,10 @@ export class AnalyticsService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [latestPlatform, topSkills, recentReports] = await Promise.all([
-      this.platformMetricsRepo.findOne({
+    const [latestPlatformArr, topSkills, recentReports] = await Promise.all([
+      this.platformMetricsRepo.find({
         order: { snapshotDate: 'DESC' },
+        take: 1,
       }),
       this.skillTrendRepo.find({
         order: { demandCount: 'DESC' },
@@ -65,12 +66,16 @@ export class AnalyticsService {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const [platformThisMonth] = await Promise.all([
-      this.platformMetricsRepo.findOne({
+    const [platformThisMonthArr] = await Promise.all([
+      this.platformMetricsRepo.find({
         where: { snapshotDate: MoreThanOrEqual(thirtyDaysAgo) as any },
         order: { snapshotDate: 'ASC' },
+        take: 1,
       }),
     ]);
+
+    const latestPlatform = latestPlatformArr[0] ?? null;
+    const platformThisMonth = platformThisMonthArr[0] ?? null;
 
     const newUsersThisMonth =
       latestPlatform && platformThisMonth
@@ -82,6 +87,11 @@ export class AnalyticsService {
         ? latestPlatform.totalProjects - platformThisMonth.totalProjects
         : latestPlatform?.newProjectsPeriod ?? 0;
 
+    const newApplicationsThisMonth =
+      latestPlatform && platformThisMonth
+        ? latestPlatform.totalApplications - platformThisMonth.totalApplications
+        : latestPlatform?.totalApplications ?? 0;
+
     return {
       platformMetrics: {
         totalUsers: latestPlatform?.totalUsers ?? 0,
@@ -90,19 +100,19 @@ export class AnalyticsService {
         totalProjects: latestPlatform?.totalProjects ?? 0,
         activeProjects: latestPlatform?.activeProjects ?? 0,
         totalApplications: latestPlatform?.totalApplications ?? 0,
-        avgMatchScore: latestPlatform?.avgMatchScore ?? null,
+        avgMatchScore: latestPlatform?.avgMatchScore != null ? Number(latestPlatform.avgMatchScore) : null,
       },
       trends: {
         newUsersThisMonth,
         newProjectsThisMonth,
-        applicationsThisMonth: latestPlatform?.newUsersPeriod ?? 0,
+        applicationsThisMonth: newApplicationsThisMonth,
         lastSnapshotDate: latestPlatform?.snapshotDate ?? null,
       },
       topSkills: topSkills.map((s) => ({
         name: s.skillName,
         demand: s.demandCount,
         supply: s.supplyCount,
-        gap: s.gapIndex,
+        gap: s.gapIndex != null ? Number(s.gapIndex) : null,
         trend: s.trendDirection,
       })),
       recentReports: recentReports.map((r) => ({

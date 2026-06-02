@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { HttpModule, HttpService } from '@nestjs/axios';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
+import { AdminEventsSubscriber } from './admin-events.subscriber';
 
 import {
   AcademicPeriod,
@@ -24,9 +26,19 @@ import {
       SupervisorAssignment,
       SystemSetting,
     ]),
+    HttpModule,
   ],
   controllers: [AdminController],
-  providers: [AdminService, EventPublisher],
+  providers: [
+    AdminService,
+    AdminEventsSubscriber,
+    EventPublisher,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => new MicroserviceHttpClient(httpService as any),
+      inject: [HttpService],
+    },
+  ],
   exports: [AdminService],
 })
 export class AdminModule {}

@@ -44,6 +44,10 @@ export class StorageController {
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadFileDto,
   ) {
+    console.log('[StorageController] uploadFile called');
+    console.log('[StorageController] user:', user);
+    console.log('[StorageController] file details:', file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : 'no file');
+    console.log('[StorageController] dto:', dto);
     if (!file) {
       throw new Error('No se proporcionó ningún archivo');
     }

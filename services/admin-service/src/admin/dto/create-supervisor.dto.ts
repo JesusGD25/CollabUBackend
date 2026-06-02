@@ -24,9 +24,10 @@ export class CreateSupervisorDto {
   @MaxLength(200)
   department?: string;
 
-  @ApiProperty({ enum: SupervisorRole })
+  @ApiPropertyOptional({ enum: SupervisorRole })
+  @IsOptional()
   @IsEnum(SupervisorRole)
-  role: SupervisorRole;
+  role?: SupervisorRole;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -219,4 +219,35 @@ export class CompanyController {
   ) {
     return this.companyService.deleteBusinessArea(user.userId, areaId);
   }
+
+  // ── ADMIN ──
+
+  @Get('admin/list')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Listar empresas con filtros (solo admin)' })
+  @ApiResponse({ status: 200, description: 'Lista paginada de empresas' })
+  async getAdminCompanies(
+    @Query('page')   page?:   string,
+    @Query('limit')  limit?:  string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.companyService.getAdminCompanies({ page: Number(page), limit: Number(limit), search, status });
+  }
+
+  @Patch('admin/:companyId/review')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Aprobar, rechazar o suspender empresa (solo admin)' })
+  @ApiResponse({ status: 200, description: 'Estado de verificación actualizado' })
+  @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
+  async reviewCompany(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Body() body: { action: 'approve' | 'reject' | 'suspend'; reason?: string },
+  ) {
+    return this.companyService.reviewCompany(companyId, body.action, body.reason);
+  }
 }

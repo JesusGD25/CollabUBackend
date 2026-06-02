@@ -4,6 +4,7 @@ export enum ApplicationStatus {
   SHORTLISTED = 'shortlisted',
   INTERVIEW = 'interview',
   ACCEPTED = 'accepted',
+  PENDING_SUPERVISOR = 'pending_supervisor',
   REJECTED = 'rejected',
   WITHDRAWN = 'withdrawn',
   IN_PROGRESS = 'in_progress',

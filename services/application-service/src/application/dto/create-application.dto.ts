@@ -15,11 +15,11 @@ export class CreateApplicationDto {
 
   @ApiPropertyOptional({ description: 'URL del CV en Storage Service' })
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   resumeUrl?: string;
 
   @ApiPropertyOptional({ description: 'URL del portafolio' })
   @IsOptional()
-  @IsUrl()
+  @IsUrl({ require_tld: false })
   portfolioUrl?: string;
 }
