@@ -275,8 +275,8 @@ export class ApplicationController {
   }
 
   @Post(':id/deliverables/create')
-  @Roles(UserRole.COMPANY, UserRole.ADMIN)
-  @ApiOperation({ summary: 'Crear y asignar un entregable a una postulación (empresa)' })
+  @Roles(UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Crear y asignar un entregable a una postulación' })
   createDeliverable(
     @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
@@ -286,7 +286,7 @@ export class ApplicationController {
   }
 
   @Post('deliverables/bulk-create')
-  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Crear el mismo entregable para múltiples postulaciones' })
   bulkCreateDeliverable(
     @CurrentUser() user: any,
