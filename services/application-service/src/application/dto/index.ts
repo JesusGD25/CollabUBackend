@@ -6,3 +6,5 @@ export { CompleteInterviewDto, CancelInterviewDto, RescheduleInterviewDto } from
 export { SubmitDeliverableDto } from './submit-deliverable.dto';
 export { ReviewDeliverableDto } from './review-deliverable.dto';
 export { ApplicationQueryDto } from './application-query.dto';
+export { CreateDeliverableDto } from './create-deliverable.dto';
+export { BulkCreateDeliverableDto } from './bulk-create-deliverable.dto';

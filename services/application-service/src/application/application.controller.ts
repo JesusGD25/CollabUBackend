@@ -33,6 +33,8 @@ import {
   SubmitDeliverableDto,
   ReviewDeliverableDto,
   ApplicationQueryDto,
+  CreateDeliverableDto,
+  BulkCreateDeliverableDto,
 } from './dto';
 import { DeliverableStatus } from './entities/student-deliverable.entity';
 
@@ -218,7 +220,7 @@ export class ApplicationController {
   }
 
   @Patch(':id/deliverables/:deliverableId/approve')
-  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Aprobar un entregable' })
   approveDeliverable(
     @CurrentUser() user: any,
@@ -236,7 +238,7 @@ export class ApplicationController {
   }
 
   @Patch(':id/deliverables/:deliverableId/reject')
-  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Rechazar un entregable' })
   rejectDeliverable(
     @CurrentUser() user: any,
@@ -254,7 +256,7 @@ export class ApplicationController {
   }
 
   @Patch(':id/deliverables/:deliverableId/request-revision')
-  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @Roles(UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Solicitar revisión de un entregable' })
   requestRevision(
     @CurrentUser() user: any,
@@ -269,5 +271,26 @@ export class ApplicationController {
       DeliverableStatus.NEEDS_REVISION,
       dto,
     );
+  }
+
+  @Post(':id/deliverables/create')
+  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Crear y asignar un entregable a una postulación (empresa)' })
+  createDeliverable(
+    @CurrentUser() user: any,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateDeliverableDto,
+  ) {
+    return this.applicationService.createDeliverable(id, user.id, dto);
+  }
+
+  @Post('deliverables/bulk-create')
+  @Roles(UserRole.COMPANY, UserRole.ADMIN)
+  @ApiOperation({ summary: 'Crear el mismo entregable para múltiples postulaciones' })
+  bulkCreateDeliverable(
+    @CurrentUser() user: any,
+    @Body() dto: BulkCreateDeliverableDto,
+  ) {
+    return this.applicationService.bulkCreateDeliverable(user.id, dto);
   }
 }

@@ -7,10 +7,12 @@ import {
   ManyToOne,
   JoinColumn,
   Index,
+  OneToMany,
 } from 'typeorm';
 import { Application } from './application.entity';
-export { DeliverableStatus } from './enums';
-import { DeliverableStatus } from './enums';
+import { DeliverableAttachment } from './deliverable-attachment.entity';
+export { DeliverableStatus, DeliverableType } from './enums';
+import { DeliverableStatus, DeliverableType } from './enums';
 
 @Entity('student_deliverables')
 @Index('idx_student_deliverables_application', ['applicationId'])
@@ -31,6 +33,18 @@ export class StudentDeliverable {
 
   @Column({ type: 'text', nullable: true })
   description: string | null;
+
+  @Column({ type: 'enum', enum: DeliverableType, nullable: true })
+  type: DeliverableType | null;
+
+  @Column({ name: 'due_date', type: 'timestamptz', nullable: true })
+  dueDate: Date | null;
+
+  @Column({ name: 'created_by_user_id', type: 'varchar', nullable: true })
+  createdByUserId: string | null;
+
+  @Column({ name: 'assigned_at', type: 'timestamptz', nullable: true })
+  assignedAt: Date | null;
 
   @Column({ name: 'file_url', type: 'varchar', nullable: true, length: 500 })
   fileUrl: string | null;
@@ -73,4 +87,7 @@ export class StudentDeliverable {
   })
   @JoinColumn({ name: 'application_id' })
   application: Application;
+
+  @OneToMany(() => DeliverableAttachment, (a) => a.deliverable)
+  attachments: DeliverableAttachment[];
 }

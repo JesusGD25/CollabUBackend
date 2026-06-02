@@ -20,6 +20,8 @@ export enum NotificationType {
   MATCH_RECOMMENDATION = 'match_recommendation',
   MESSAGE_RECEIVED = 'message_received',
   DELIVERABLE_FEEDBACK = 'deliverable_feedback',
+  DELIVERABLE_ASSIGNED = 'deliverable_assigned',
+  DELIVERABLE_SUBMITTED = 'deliverable_submitted',
   COMPANY_VERIFIED = 'company_verified',
   SYSTEM_ANNOUNCEMENT = 'system_announcement',
 }
