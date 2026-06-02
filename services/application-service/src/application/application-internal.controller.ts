@@ -47,4 +47,9 @@ export class ApplicationInternalController {
     await this.applicationService.startInProgress(id);
     return { message: 'Postulación iniciada correctamente' };
   }
+
+  @Get(':id/enriched')
+  async getEnrichedApplication(@Param('id', ParseUUIDPipe) id: string) {
+    return this.applicationService.findEnrichedById(id);
+  }
 }

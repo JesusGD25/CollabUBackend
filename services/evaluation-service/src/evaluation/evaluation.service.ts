@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Evaluation } from './entities/evaluation.entity';
 import { EvaluationCriteria } from './entities/evaluation-criteria.entity';
@@ -20,6 +20,9 @@ import {
   CreateEvaluationDto,
   SubmitEvaluationDto,
   CreateCriterionDto,
+  UpdateCriterionDto,
+  CreateTemplateDto,
+  UpdateTemplateDto,
   EvaluationQueryDto,
 } from './dto';
 
@@ -44,6 +47,7 @@ export class EvaluationService {
     @InjectRepository(EvaluationTemplate)
     private readonly templateRepo: Repository<EvaluationTemplate>,
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
   // ──────────────────────────────────────────────────────────────────
@@ -79,6 +83,10 @@ export class EvaluationService {
       dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
     });
 
+    const projectInfo = await this.httpClient
+      .get<{ id: string; title: string }>(`project`, `/internal/projects/${dto.projectId}/exists`)
+      .catch(() => null);
+
     const saved = await this.evaluationRepo.save(evaluation);
 
     await this.eventPublisher.publish(
@@ -87,6 +95,7 @@ export class EvaluationService {
         evaluationId: saved.id,
         applicationId: saved.applicationId,
         projectId: saved.projectId,
+        projectTitle: projectInfo?.title ?? null,
         evaluatorId: saved.evaluatorId,
         evaluatedId: saved.evaluatedId,
         evaluationType: saved.evaluationType,
@@ -158,6 +167,10 @@ export class EvaluationService {
     evaluation.areasForImprovement = dto.areasForImprovement ?? null;
     evaluation.completedAt = new Date();
 
+    const projectInfo = await this.httpClient
+      .get<{ id: string; title: string }>(`project`, `/internal/projects/${evaluation.projectId}/exists`)
+      .catch(() => null);
+
     const updated = await this.evaluationRepo.save(evaluation);
 
     await this.eventPublisher.publish(
@@ -166,6 +179,7 @@ export class EvaluationService {
         evaluationId: updated.id,
         applicationId: updated.applicationId,
         projectId: updated.projectId,
+        projectTitle: projectInfo?.title ?? null,
         evaluatedId: updated.evaluatedId,
         evaluationType: updated.evaluationType,
         overallScore: updated.overallScore,
@@ -317,19 +331,42 @@ export class EvaluationService {
     return this.templateRepo.find({ where, order: { createdAt: 'DESC' } });
   }
 
-  async createTemplate(
-    name: string,
-    evaluationType: EvaluationType,
-    criteriaIds: string[],
-    createdBy: string,
-  ): Promise<EvaluationTemplate> {
+  async createTemplate(dto: CreateTemplateDto, createdBy?: string): Promise<EvaluationTemplate> {
     const template = this.templateRepo.create({
-      name,
-      evaluationType,
-      criteriaIds,
-      createdBy,
+      name: dto.name,
+      evaluationType: dto.evaluationType,
+      criteriaIds: dto.criteriaIds,
+      description: dto.description ?? null,
+      isDefault: dto.isDefault ?? false,
+      isActive: true,
+      createdBy: createdBy ?? null,
     });
-
     return this.templateRepo.save(template);
+  }
+
+  async updateTemplate(id: string, dto: UpdateTemplateDto): Promise<EvaluationTemplate> {
+    const template = await this.templateRepo.findOne({ where: { id } });
+    if (!template) throw new NotFoundException('Plantilla no encontrada');
+    Object.assign(template, dto);
+    return this.templateRepo.save(template);
+  }
+
+  async deleteTemplate(id: string): Promise<void> {
+    const template = await this.templateRepo.findOne({ where: { id } });
+    if (!template) throw new NotFoundException('Plantilla no encontrada');
+    await this.templateRepo.remove(template);
+  }
+
+  async updateCriterion(id: string, dto: UpdateCriterionDto): Promise<EvaluationCriteria> {
+    const criterion = await this.criteriaRepo.findOne({ where: { id } });
+    if (!criterion) throw new NotFoundException('Criterio no encontrado');
+    Object.assign(criterion, dto);
+    return this.criteriaRepo.save(criterion);
+  }
+
+  async deleteCriterion(id: string): Promise<void> {
+    const criterion = await this.criteriaRepo.findOne({ where: { id } });
+    if (!criterion) throw new NotFoundException('Criterio no encontrado');
+    await this.criteriaRepo.remove(criterion);
   }
 }

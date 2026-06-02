@@ -6,7 +6,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { EvaluationService } from './evaluation.service';
 import { Evaluation } from './entities/evaluation.entity';
@@ -83,6 +83,7 @@ describe('EvaluationService', () => {
     mockRatingRepo = createMockRepo();
     mockTemplateRepo = createMockRepo();
     mockEventPublisher = { publish: jest.fn().mockResolvedValue(undefined) };
+    const mockHttpClient = { get: jest.fn().mockResolvedValue(null), patch: jest.fn().mockResolvedValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -92,6 +93,7 @@ describe('EvaluationService', () => {
         { provide: getRepositoryToken(EvaluationRating), useValue: mockRatingRepo },
         { provide: getRepositoryToken(EvaluationTemplate), useValue: mockTemplateRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
+        { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
     }).compile();
 

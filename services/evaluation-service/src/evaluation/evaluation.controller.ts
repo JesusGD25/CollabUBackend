@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -25,6 +27,9 @@ import {
   CreateEvaluationDto,
   SubmitEvaluationDto,
   CreateCriterionDto,
+  UpdateCriterionDto,
+  CreateTemplateDto,
+  UpdateTemplateDto,
   EvaluationQueryDto,
 } from './dto';
 import { EvaluationType } from './entities/enums';
@@ -126,5 +131,61 @@ export class EvaluationController {
     @Body() dto: SubmitEvaluationDto,
   ) {
     return this.evaluationService.submitEvaluation(id, user.id, dto);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // PLANTILLAS (TEMPLATES) - ADMIN CRUD
+  // ──────────────────────────────────────────────────────────────────
+
+  @Post('templates')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({ summary: 'Crear plantilla de evaluación (admin)' })
+  createTemplate(@Body() dto: CreateTemplateDto, @CurrentUser() user: any) {
+    return this.evaluationService.createTemplate(dto, user.id);
+  }
+
+  @Patch('templates/:id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Actualizar plantilla (admin)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  updateTemplate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateTemplateDto,
+  ) {
+    return this.evaluationService.updateTemplate(id, dto);
+  }
+
+  @Delete('templates/:id')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar plantilla (admin)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  deleteTemplate(@Param('id', ParseUUIDPipe) id: string) {
+    return this.evaluationService.deleteTemplate(id);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // CRITERIOS - ADMIN CRUD
+  // ──────────────────────────────────────────────────────────────────
+
+  @Patch('criteria/:id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Actualizar criterio (admin)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  updateCriterion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCriterionDto,
+  ) {
+    return this.evaluationService.updateCriterion(id, dto);
+  }
+
+  @Delete('criteria/:id')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Eliminar criterio (admin)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  deleteCriterion(@Param('id', ParseUUIDPipe) id: string) {
+    return this.evaluationService.deleteCriterion(id);
   }
 }

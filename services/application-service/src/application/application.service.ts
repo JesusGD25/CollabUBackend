@@ -287,6 +287,87 @@ export class ApplicationService {
     return app;
   }
 
+  async findEnrichedById(id: string): Promise<{
+    id: string;
+    projectId: string;
+    studentId: string;
+    status: ApplicationStatus;
+    matchScore: number | null;
+    appliedAt: Date;
+    acceptedAt: Date | null;
+    completedAt: Date | null;
+    projectTitle: string;
+    companyId: string;
+    companyName: string | null;
+    studentUserId: string;
+    studentFirstName: string | null;
+    studentLastName: string | null;
+    studentAvatarUrl: string | null;
+    companyUserId: string;
+    companyNameFromProfile: string | null;
+    companyLogoUrl: string | null;
+  }> {
+    const app = await this.findApplicationById(id);
+
+    const projectInfo = await this.httpClient
+      .get<{ id: string; title: string; companyId: string }>(
+        'project',
+        `/internal/projects/${app.projectId}/exists`,
+      )
+      .catch(() => null);
+
+    const studentProfile = await this.httpClient
+      .get<{ userId: string; firstName: string; lastName: string; avatarUrl: string | null }>(
+        'user',
+        `/internal/users/profile/${app.studentId}/basic`,
+      )
+      .catch(() => null);
+
+    let companyUserId = '';
+    let companyNameFromProfile: string | null = null;
+    let companyLogoUrl: string | null = null;
+
+    if (projectInfo?.companyId) {
+      const companyProfile = await this.httpClient
+        .get<{ companyId: string; companyName: string; logoUrl: string | null }>(
+          'company',
+          `/internal/companies/${projectInfo.companyId}/basic-info`,
+        )
+        .catch(() => null);
+      if (companyProfile) {
+        companyUserId = companyProfile.companyId;
+        companyNameFromProfile = companyProfile.companyName;
+        companyLogoUrl = companyProfile.logoUrl;
+      }
+    }
+
+    const studentUserId = app.studentId;
+    const studentFirstName = studentProfile?.firstName ?? null;
+    const studentLastName = studentProfile?.lastName ?? null;
+    const studentAvatarUrl = studentProfile?.avatarUrl ?? null;
+
+    return {
+      id: app.id,
+      projectId: app.projectId,
+      studentId: app.studentId,
+      status: app.status,
+      matchScore: app.matchScore,
+      appliedAt: app.appliedAt,
+      acceptedAt: app.acceptedAt,
+      completedAt: app.completedAt,
+      projectTitle: projectInfo?.title ?? app.projectId,
+      companyId: projectInfo?.companyId ?? '',
+      companyName: companyNameFromProfile,
+      studentUserId,
+      studentFirstName,
+      studentLastName,
+      studentAvatarUrl,
+      companyUserId,
+      companyNameFromProfile,
+      companyLogoUrl,
+    };
+  }
+
   async getApplicationTimeline(applicationId: string): Promise<ApplicationTimeline[]> {
     await this.findApplicationById(applicationId); // verifica que exista
     return this.timelineRepo.find({
