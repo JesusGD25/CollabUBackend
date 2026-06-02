@@ -197,6 +197,7 @@ export class ApplicationController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SubmitDeliverableDto,
   ) {
+    console.log('[submitDeliverable] raw dto:', JSON.stringify(dto));
     return this.applicationService.submitDeliverable(id, user.id, dto);
   }
 

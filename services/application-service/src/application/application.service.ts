@@ -673,15 +673,16 @@ export class ApplicationService {
     studentId: string,
     dto: SubmitDeliverableDto,
   ): Promise<StudentDeliverable> {
+    this.logger.debug(`submitDeliverable called: app=${applicationId}, student=${studentId}, dto=${JSON.stringify(dto)}`);
     const application = await this.findApplicationById(applicationId);
 
     if (application.studentId !== studentId) {
       throw new ForbiddenException('Solo puedes enviar entregables en tus propias postulaciones');
     }
 
-    if (application.status !== ApplicationStatus.ACCEPTED) {
+    if (application.status !== ApplicationStatus.ACCEPTED && application.status !== ApplicationStatus.IN_PROGRESS) {
       throw new BadRequestException(
-        'Solo puedes enviar entregables en postulaciones aceptadas',
+        `Solo puedes enviar entregables en postulaciones aceptadas o en progreso (estado actual: ${application.status})`,
       );
     }
 
