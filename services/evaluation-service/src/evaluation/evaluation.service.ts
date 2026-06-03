@@ -6,6 +6,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
@@ -81,6 +82,7 @@ export class EvaluationService {
       status: EvaluationStatus.PENDING,
       isAnonymous: dto.isAnonymous ?? false,
       dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+      templateId: dto.templateId ?? null,
     });
 
     const projectInfo = await this.httpClient
@@ -368,5 +370,26 @@ export class EvaluationService {
     const criterion = await this.criteriaRepo.findOne({ where: { id } });
     if (!criterion) throw new NotFoundException('Criterio no encontrado');
     await this.criteriaRepo.remove(criterion);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // SCHEDULED JOBS
+  // ──────────────────────────────────────────────────────────────────
+
+  @Cron(CronExpression.EVERY_HOUR)
+  async expireEvaluations(): Promise<void> {
+    const now = new Date();
+    const result = await this.evaluationRepo
+      .createQueryBuilder('eval')
+      .update(Evaluation)
+      .set({ status: EvaluationStatus.EXPIRED })
+      .where('status = :pending', { pending: EvaluationStatus.PENDING })
+      .andWhere('due_date IS NOT NULL')
+      .andWhere('due_date < :now', { now })
+      .execute();
+
+    if (result.affected && result.affected > 0) {
+      this.logger.log(`Job expiración: ${result.affected} evaluación(es) marcada(s) como expiradas`);
+    }
   }
 }

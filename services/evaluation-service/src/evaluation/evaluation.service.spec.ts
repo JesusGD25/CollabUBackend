@@ -52,6 +52,7 @@ const makeMockEvaluation = (
     isAnonymous: false,
     dueDate: null,
     completedAt: null,
+    templateId: null,
     ratings: [],
     createdAt: new Date('2025-01-01'),
     updatedAt: new Date('2025-01-01'),

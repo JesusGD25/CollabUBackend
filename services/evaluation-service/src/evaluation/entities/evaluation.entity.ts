@@ -53,6 +53,9 @@ export class Evaluation {
   @Column({ name: 'completed_at', type: 'timestamptz', nullable: true })
   completedAt: Date | null;
 
+  @Column({ name: 'template_id', type: 'uuid', nullable: true })
+  templateId: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
