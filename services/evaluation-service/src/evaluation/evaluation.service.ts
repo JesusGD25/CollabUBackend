@@ -156,11 +156,16 @@ export class EvaluationService {
     }
 
     // Calcular overall score como promedio de todos los ratings
-    const allRatings = await this.ratingRepo.find({ where: { evaluationId: id } });
-    const overallScore =
-      allRatings.length > 0
+    let overallScore: number | null = null;
+    
+    if (dto.ratings && dto.ratings.length > 0) {
+      const allRatings = await this.ratingRepo.find({ where: { evaluationId: id } });
+      overallScore = allRatings.length > 0
         ? allRatings.reduce((sum, r) => sum + Number(r.score), 0) / allRatings.length
         : null;
+    } else if (dto.overallScore !== undefined) {
+      overallScore = dto.overallScore;
+    }
 
     evaluation.status = EvaluationStatus.COMPLETED;
     evaluation.overallScore = overallScore;
