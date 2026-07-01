@@ -7,6 +7,7 @@ import { Application } from './entities/application.entity';
 import { ApplicationTimeline } from './entities/application-timeline.entity';
 import { Interview } from './entities/interview.entity';
 import { StudentDeliverable } from './entities/student-deliverable.entity';
+import { DeliverableAttachment } from './entities/deliverable-attachment.entity';
 
 import { ApplicationService } from './application.service';
 import { ApplicationController } from './application.controller';
@@ -20,6 +21,7 @@ import { EventPublisher } from '@collab-u/shared';
       ApplicationTimeline,
       Interview,
       StudentDeliverable,
+      DeliverableAttachment,
     ]),
     HttpModule,
   ],

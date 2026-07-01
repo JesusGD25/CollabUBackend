@@ -193,5 +193,91 @@ export class NotificationSubscriber implements OnModuleInit {
         }
       },
     );
+
+    // deliverable.assigned → notify student
+    await this.eventSubscriber.subscribe(
+      'notification-service.deliverable.assigned',
+      'deliverable.assigned',
+      async (event) => {
+        const { studentId, title, dueDate, applicationId, projectId } = event.data;
+        if (!studentId) return;
+
+        this.logger.log(`Evento recibido: deliverable.assigned para estudiante ${studentId}`);
+
+        try {
+          await this.notificationService.createSystemNotification(
+            studentId,
+            NotificationType.DELIVERABLE_ASSIGNED,
+            'Nuevo entregable asignado',
+            `Se ha asignado un nuevo entregable: "${title || 'sin título'}". Fecha límite: ${dueDate ? new Date(dueDate).toLocaleDateString('es-ES') : 'no definida'}`,
+            { applicationId, projectId },
+          );
+        } catch (error: any) {
+          this.logger.error(`Error creando notificación deliverable.assigned: ${error.message}`, error.stack);
+        }
+      },
+    );
+
+    // deliverable.submitted → notify company and supervisor
+    await this.eventSubscriber.subscribe(
+      'notification-service.deliverable.submitted',
+      'deliverable.submitted',
+      async (event) => {
+        const { companyUserId, supervisorUserId, title, applicationId, projectId } = event.data;
+
+        try {
+          if (companyUserId) {
+            await this.notificationService.createSystemNotification(
+              companyUserId,
+              NotificationType.DELIVERABLE_SUBMITTED,
+              'Entregable recibido',
+              `El estudiante ha enviado un entregable: "${title || 'sin título'}"`,
+              { applicationId, projectId },
+            );
+          }
+          if (supervisorUserId) {
+            await this.notificationService.createSystemNotification(
+              supervisorUserId,
+              NotificationType.DELIVERABLE_SUBMITTED,
+              'Entregable recibido para revisión',
+              `Un estudiante ha enviado un entregable que requiere revisión: "${title || 'sin título'}"`,
+              { applicationId, projectId },
+            );
+          }
+        } catch (error: any) {
+          this.logger.error(`Error creando notificación deliverable.submitted: ${error.message}`, error.stack);
+        }
+      },
+    );
+
+    // deliverable.reviewed → notify student
+    await this.eventSubscriber.subscribe(
+      'notification-service.deliverable.reviewed',
+      'deliverable.reviewed',
+      async (event) => {
+        const { studentId, status, title, applicationId, projectId } = event.data;
+        if (!studentId) return;
+
+        this.logger.log(`Evento recibido: deliverable.reviewed para estudiante ${studentId}`);
+
+        const statusLabel: Record<string, string> = {
+          approved: 'aprobado',
+          rejected: 'rechazado',
+          needs_revision: 'solicita revisión',
+        };
+
+        try {
+          await this.notificationService.createSystemNotification(
+            studentId,
+            NotificationType.DELIVERABLE_FEEDBACK,
+            'Tu entregable fue revisado',
+            `Tu entregable "${title || 'sin título'}" ha sido ${statusLabel[status] || 'revisado'}`,
+            { applicationId, projectId, status },
+          );
+        } catch (error: any) {
+          this.logger.error(`Error creando notificación deliverable.reviewed: ${error.message}`, error.stack);
+        }
+      },
+    );
   }
 }

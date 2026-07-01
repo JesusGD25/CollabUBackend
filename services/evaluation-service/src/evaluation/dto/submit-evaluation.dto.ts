@@ -37,6 +37,11 @@ export class SubmitEvaluationDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @IsNumber()
+  overallScore?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   overallComment?: string;
 

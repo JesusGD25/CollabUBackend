@@ -70,4 +70,12 @@ export class ProjectInternalController {
     await this.projectService.startProject(projectId);
     return { message: 'Proyecto iniciado correctamente' };
   }
+
+  @Get(':projectId/deliverables')
+  @ApiOperation({ summary: 'Obtener plantillas de entregables de un proyecto (uso interno)' })
+  @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Entregables del proyecto' })
+  async getProjectDeliverables(@Param('projectId', ParseUUIDPipe) projectId: string) {
+    return this.projectService.getDeliverables(projectId);
+  }
 }

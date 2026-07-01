@@ -14,6 +14,7 @@ import { Application, ApplicationStatus } from './entities/application.entity';
 import { ApplicationTimeline } from './entities/application-timeline.entity';
 import { Interview, InterviewStatus, InterviewType } from './entities/interview.entity';
 import { StudentDeliverable, DeliverableStatus } from './entities/student-deliverable.entity';
+import { DeliverableAttachment } from './entities/deliverable-attachment.entity';
 
 import {
   CreateApplicationDto,
@@ -26,6 +27,8 @@ import {
   SubmitDeliverableDto,
   ReviewDeliverableDto,
   ApplicationQueryDto,
+  CreateDeliverableDto,
+  BulkCreateDeliverableDto,
 } from './dto';
 
 /** Transiciones de estado permitidas para la empresa */
@@ -85,6 +88,8 @@ export class ApplicationService {
     private readonly interviewRepo: Repository<Interview>,
     @InjectRepository(StudentDeliverable)
     private readonly deliverableRepo: Repository<StudentDeliverable>,
+    @InjectRepository(DeliverableAttachment)
+    private readonly attachmentRepo: Repository<DeliverableAttachment>,
     private readonly eventPublisher: EventPublisher,
     private readonly httpClient: MicroserviceHttpClient,
   ) {}
@@ -282,6 +287,87 @@ export class ApplicationService {
     return app;
   }
 
+  async findEnrichedById(id: string): Promise<{
+    id: string;
+    projectId: string;
+    studentId: string;
+    status: ApplicationStatus;
+    matchScore: number | null;
+    appliedAt: Date;
+    acceptedAt: Date | null;
+    completedAt: Date | null;
+    projectTitle: string;
+    companyId: string;
+    companyName: string | null;
+    studentUserId: string;
+    studentFirstName: string | null;
+    studentLastName: string | null;
+    studentAvatarUrl: string | null;
+    companyUserId: string;
+    companyNameFromProfile: string | null;
+    companyLogoUrl: string | null;
+  }> {
+    const app = await this.findApplicationById(id);
+
+    const projectInfo = await this.httpClient
+      .get<{ id: string; title: string; companyId: string }>(
+        'project',
+        `/internal/projects/${app.projectId}/exists`,
+      )
+      .catch(() => null);
+
+    const studentProfile = await this.httpClient
+      .get<{ userId: string; firstName: string; lastName: string; avatarUrl: string | null }>(
+        'user',
+        `/internal/users/profile/${app.studentId}/basic`,
+      )
+      .catch(() => null);
+
+    let companyUserId = '';
+    let companyNameFromProfile: string | null = null;
+    let companyLogoUrl: string | null = null;
+
+    if (projectInfo?.companyId) {
+      const companyProfile = await this.httpClient
+        .get<{ companyId: string; companyName: string; logoUrl: string | null }>(
+          'company',
+          `/internal/companies/${projectInfo.companyId}/basic-info`,
+        )
+        .catch(() => null);
+      if (companyProfile) {
+        companyUserId = companyProfile.companyId;
+        companyNameFromProfile = companyProfile.companyName;
+        companyLogoUrl = companyProfile.logoUrl;
+      }
+    }
+
+    const studentUserId = app.studentId;
+    const studentFirstName = studentProfile?.firstName ?? null;
+    const studentLastName = studentProfile?.lastName ?? null;
+    const studentAvatarUrl = studentProfile?.avatarUrl ?? null;
+
+    return {
+      id: app.id,
+      projectId: app.projectId,
+      studentId: app.studentId,
+      status: app.status,
+      matchScore: app.matchScore,
+      appliedAt: app.appliedAt,
+      acceptedAt: app.acceptedAt,
+      completedAt: app.completedAt,
+      projectTitle: projectInfo?.title ?? app.projectId,
+      companyId: projectInfo?.companyId ?? '',
+      companyName: companyNameFromProfile,
+      studentUserId,
+      studentFirstName,
+      studentLastName,
+      studentAvatarUrl,
+      companyUserId,
+      companyNameFromProfile,
+      companyLogoUrl,
+    };
+  }
+
   async getApplicationTimeline(applicationId: string): Promise<ApplicationTimeline[]> {
     await this.findApplicationById(applicationId); // verifica que exista
     return this.timelineRepo.find({
@@ -367,6 +453,8 @@ export class ApplicationService {
     application.status = ApplicationStatus.IN_PROGRESS;
     await this.applicationRepo.save(application);
 
+    await this.instantiateProjectDeliverables(applicationId);
+
     await this.addTimelineEntry(
       applicationId,
       previousStatus,
@@ -382,6 +470,41 @@ export class ApplicationService {
     }, 'application-service');
 
     this.logger.log(`Postulación ${applicationId} iniciada (supervisor asignado)`);
+  }
+
+  private async instantiateProjectDeliverables(applicationId: string): Promise<void> {
+    const application = await this.applicationRepo.findOne({ where: { id: applicationId } });
+    if (!application) return;
+
+    let templates: any[] = [];
+    try {
+      templates = await this.httpClient.get<any[]>(
+        'project',
+        `/internal/projects/${application.projectId}/deliverables`,
+      );
+    } catch (err) {
+      this.logger.warn(`No se pudieron obtener plantillas de entregables para proyecto ${application.projectId}: ${err.message}`);
+      return;
+    }
+
+    for (const template of templates) {
+      const deliverable = this.deliverableRepo.create({
+        applicationId,
+        title: template.title,
+        description: template.description ?? null,
+        projectDeliverableId: template.id,
+        dueDate: template.dueDate ? new Date(template.dueDate) : null,
+        createdByUserId: 'system',
+        assignedAt: new Date(),
+        status: DeliverableStatus.PENDING,
+        type: null,
+      });
+      await this.deliverableRepo.save(deliverable);
+    }
+
+    if (templates.length > 0) {
+      this.logger.log(`Instanciadas ${templates.length} plantillas de entregables para aplicación ${applicationId}`);
+    }
   }
 
   async updateStatus(
@@ -631,15 +754,16 @@ export class ApplicationService {
     studentId: string,
     dto: SubmitDeliverableDto,
   ): Promise<StudentDeliverable> {
+    this.logger.debug(`submitDeliverable called: app=${applicationId}, student=${studentId}, dto=${JSON.stringify(dto)}`);
     const application = await this.findApplicationById(applicationId);
 
     if (application.studentId !== studentId) {
       throw new ForbiddenException('Solo puedes enviar entregables en tus propias postulaciones');
     }
 
-    if (application.status !== ApplicationStatus.ACCEPTED) {
+    if (application.status !== ApplicationStatus.ACCEPTED && application.status !== ApplicationStatus.IN_PROGRESS) {
       throw new BadRequestException(
-        'Solo puedes enviar entregables en postulaciones aceptadas',
+        `Solo puedes enviar entregables en postulaciones aceptadas o en progreso (estado actual: ${application.status})`,
       );
     }
 
@@ -653,7 +777,18 @@ export class ApplicationService {
       status: DeliverableStatus.SUBMITTED,
     });
 
-    return this.deliverableRepo.save(deliverable);
+    const saved = await this.deliverableRepo.save(deliverable);
+
+    await this.eventPublisher.publish('deliverable.submitted', {
+      deliverableId: saved.id,
+      applicationId,
+      projectId: application.projectId,
+      studentId: application.studentId,
+      title: saved.title,
+      submittedAt: saved.submittedAt,
+    }, 'application-service');
+
+    return saved;
   }
 
   async updateDeliverable(
@@ -694,7 +829,7 @@ export class ApplicationService {
     status: DeliverableStatus.APPROVED | DeliverableStatus.REJECTED | DeliverableStatus.NEEDS_REVISION,
     dto: ReviewDeliverableDto,
   ): Promise<StudentDeliverable> {
-    await this.findApplicationById(applicationId);
+    const application = await this.findApplicationById(applicationId);
     const deliverable = await this.findDeliverableById(deliverableId, applicationId);
 
     if (deliverable.status !== DeliverableStatus.SUBMITTED) {
@@ -707,15 +842,120 @@ export class ApplicationService {
     deliverable.reviewedBy = companyUserId;
     deliverable.reviewedAt = new Date();
 
-    return this.deliverableRepo.save(deliverable);
+    const saved = await this.deliverableRepo.save(deliverable);
+
+    await this.eventPublisher.publish('deliverable.reviewed', {
+      deliverableId: saved.id,
+      applicationId,
+      projectId: application.projectId,
+      studentId: application.studentId,
+      status,
+      grade: dto.grade,
+      reviewerUserId: companyUserId,
+    }, 'application-service');
+
+    return saved;
   }
 
-  async getDeliverables(applicationId: string): Promise<StudentDeliverable[]> {
+  async getDeliverables(applicationId: string): Promise<any[]> {
     await this.findApplicationById(applicationId);
-    return this.deliverableRepo.find({
+    const deliverables = await this.deliverableRepo.find({
       where: { applicationId },
+      relations: ['attachments'],
       order: { createdAt: 'ASC' },
     });
+
+    const now = new Date();
+    return deliverables.map((d) => ({
+      ...d,
+      isOverdue: d.status === DeliverableStatus.PENDING && d.dueDate && new Date(d.dueDate) < now,
+    }));
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // CREAR ENTREGABLE (EMPRESA)
+  // ──────────────────────────────────────────────────────────────────
+
+  async createDeliverable(
+    applicationId: string,
+    companyUserId: string,
+    dto: CreateDeliverableDto,
+  ): Promise<StudentDeliverable> {
+    const application = await this.findApplicationById(applicationId);
+
+    const validStatuses = [ApplicationStatus.ACCEPTED, ApplicationStatus.IN_PROGRESS];
+    if (!validStatuses.includes(application.status)) {
+      throw new BadRequestException(
+        'Solo se pueden crear entregables en postulaciones aceptadas o en progreso',
+      );
+    }
+
+    const deliverable = this.deliverableRepo.create({
+      applicationId,
+      title: dto.title,
+      description: dto.description ?? null,
+      type: dto.type ?? null,
+      dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+      projectDeliverableId: dto.projectDeliverableId ?? null,
+      createdByUserId: companyUserId,
+      assignedAt: new Date(),
+      status: DeliverableStatus.PENDING,
+    });
+
+    const saved = await this.deliverableRepo.save(deliverable);
+
+    await this.eventPublisher.publish('deliverable.assigned', {
+      deliverableId: saved.id,
+      applicationId,
+      projectId: application.projectId,
+      studentId: application.studentId,
+      title: saved.title,
+      dueDate: saved.dueDate,
+      assignedBy: companyUserId,
+    }, 'application-service');
+
+    this.logger.log(`Deliverable ${saved.id} created for application ${applicationId} by ${companyUserId}`);
+    return saved;
+  }
+
+  async bulkCreateDeliverable(
+    companyUserId: string,
+    dto: BulkCreateDeliverableDto,
+  ): Promise<StudentDeliverable[]> {
+    const created: StudentDeliverable[] = [];
+
+    for (const applicationId of dto.applicationIds) {
+      const deliverable = this.deliverableRepo.create({
+        applicationId,
+        title: dto.title,
+        description: dto.description ?? null,
+        type: dto.type ?? null,
+        dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+        projectDeliverableId: dto.projectDeliverableId ?? null,
+        createdByUserId: companyUserId,
+        assignedAt: new Date(),
+        status: DeliverableStatus.PENDING,
+      });
+      created.push(await this.deliverableRepo.save(deliverable));
+    }
+
+    this.logger.log(`Bulk created ${created.length} deliverables by ${companyUserId}`);
+    return created;
+  }
+
+  async addDeliverableAttachment(
+    deliverableId: string,
+    data: { fileUrl: string; fileName: string; fileSizeBytes?: number; mimeType?: string; uploadedByUserId?: string },
+  ): Promise<DeliverableAttachment> {
+    const attachment = this.attachmentRepo.create({
+      deliverableId,
+      fileUrl: data.fileUrl,
+      fileName: data.fileName,
+      fileSizeBytes: data.fileSizeBytes ?? null,
+      mimeType: data.mimeType ?? null,
+      uploadedByUserId: data.uploadedByUserId ?? null,
+    });
+    return this.attachmentRepo.save(attachment);
   }
 
   // ──────────────────────────────────────────────────────────────────
