@@ -9,6 +9,7 @@ const mockEventSubscriber = {
 
 const mockUsersService = {
   createProfile: jest.fn(),
+  setOnboardingStatus: jest.fn(),
 };
 
 describe('UserEventsSubscriber', () => {
@@ -33,22 +34,35 @@ describe('UserEventsSubscriber', () => {
   });
 
   describe('onModuleInit', () => {
-    it('debería suscribirse al evento auth.user.created', async () => {
+    it('debería suscribirse a auth.user.verified y eventos de progreso por rol', async () => {
       mockEventSubscriber.subscribe.mockResolvedValue(undefined);
 
       await subscriber.onModuleInit();
 
       expect(mockEventSubscriber.subscribe).toHaveBeenCalledWith(
-        'user-service.auth.user.created',
-        'auth.user.created',
+        'user-service.auth.user.verified',
+        'auth.user.verified',
+        expect.any(Function),
+      );
+      expect(mockEventSubscriber.subscribe).toHaveBeenCalledWith(
+        'user-service.student.profile.updated',
+        'student.profile.updated',
+        expect.any(Function),
+      );
+      expect(mockEventSubscriber.subscribe).toHaveBeenCalledWith(
+        'user-service.company.profile.updated',
+        'company.profile.updated',
         expect.any(Function),
       );
     });
 
     it('debería crear un perfil base cuando se recibe el evento', async () => {
       mockEventSubscriber.subscribe.mockImplementation(
-        async (_queue: string, _pattern: string, handler: (event: any) => Promise<void>) => {
-          // Simular recepción del evento
+        async (_queue: string, pattern: string, handler: (event: any) => Promise<void>) => {
+          if (pattern !== 'auth.user.verified') {
+            return;
+          }
+
           await handler({
             data: {
               userId: 'new-user-uuid',
@@ -72,7 +86,11 @@ describe('UserEventsSubscriber', () => {
 
     it('debería manejar errores sin propagarlos', async () => {
       mockEventSubscriber.subscribe.mockImplementation(
-        async (_q: string, _p: string, handler: (event: any) => Promise<void>) => {
+        async (_q: string, pattern: string, handler: (event: any) => Promise<void>) => {
+          if (pattern !== 'auth.user.verified') {
+            return;
+          }
+
           await handler({
             data: { userId: 'err-user', email: 'err@x.co', role: 'student' },
           });
@@ -82,6 +100,25 @@ describe('UserEventsSubscriber', () => {
 
       // No debería lanzar excepción
       await expect(subscriber.onModuleInit()).resolves.not.toThrow();
+    });
+
+    it('debería actualizar onboarding con eventos de progreso de estudiante', async () => {
+      mockEventSubscriber.subscribe.mockImplementation(
+        async (_queue: string, pattern: string, handler: (event: any) => Promise<void>) => {
+          if (pattern !== 'student.profile.updated') {
+            return;
+          }
+
+          await handler({
+            data: { userId: 'student-user-1', isOnboardingReady: true },
+          });
+        },
+      );
+      mockUsersService.setOnboardingStatus.mockResolvedValue({ id: 'profile-1' });
+
+      await subscriber.onModuleInit();
+
+      expect(mockUsersService.setOnboardingStatus).toHaveBeenCalledWith('student-user-1', true);
     });
   });
 });

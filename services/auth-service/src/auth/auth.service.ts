@@ -21,6 +21,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { VerifyEmailDto } from './dto/verify-email.dto';
+import { ResendVerificationEmailDto } from './dto/resend-verification-email.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -32,6 +33,7 @@ const ACCESS_TOKEN_EXPIRY = '1h';
 const REFRESH_TOKEN_DAYS = 7;
 const VERIFICATION_TOKEN_HOURS = 24;
 const RESET_TOKEN_HOURS = 1;
+const RESEND_VERIFICATION_COOLDOWN_SECONDS = 60;
 
 @Injectable()
 export class AuthService {
@@ -117,6 +119,13 @@ export class AuthService {
     if (!user.isActive) {
       throw new UnauthorizedException('La cuenta está desactivada');
     }
+
+    // TEMP: Mientras no esté habilitado el flujo de envío/verificación de correo,
+    // permitimos login aunque el email no esté verificado.
+    // Restaurar esta validación cuando el flujo de verificación esté operativo.
+    // if (!user.isVerified) {
+    //   throw new UnauthorizedException('Debes verificar tu correo antes de iniciar sesión');
+    // }
 
     // 4. Comparar password
     const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
@@ -268,24 +277,85 @@ export class AuthService {
       throw new BadRequestException('Token de verificación inválido o expirado');
     }
 
+    const user = await this.userRepo.findOne({ where: { id: verificationToken.userId } });
+    if (!user) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
     // 2. Marcar token como usado
     verificationToken.used = true;
     verificationToken.usedAt = new Date();
     await this.verificationTokenRepo.save(verificationToken);
 
     // 3. Actualizar user.isVerified
-    await this.userRepo.update(verificationToken.userId, { isVerified: true });
+    await this.userRepo.update(user.id, { isVerified: true });
 
     // 4. Publicar evento
     await this.eventPublisher.publish(
       'auth.user.verified',
-      { userId: verificationToken.userId },
+      { userId: user.id, email: user.email, role: user.role },
       'auth-service',
     );
 
-    this.logger.log(`Email verificado: usuario ${verificationToken.userId}`);
+    this.logger.log(`Email verificado: usuario ${user.id}`);
 
     return { message: 'Email verificado exitosamente' };
+  }
+
+  // ─── RESEND VERIFICATION EMAIL ───────────────────────────────────
+  async resendVerificationEmail(dto: ResendVerificationEmailDto): Promise<{ message: string }> {
+    const genericMessage =
+      'Si el email está registrado y pendiente de verificación, recibirás un nuevo enlace';
+
+    const user = await this.userRepo.findOne({ where: { email: dto.email } });
+
+    // No revelar si el usuario existe
+    if (!user || user.isVerified || !user.isActive) {
+      return { message: genericMessage };
+    }
+
+    const latestToken = await this.verificationTokenRepo.findOne({
+      where: {
+        userId: user.id,
+        type: VerificationTokenType.EMAIL_VERIFICATION,
+        used: false,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (latestToken) {
+      const secondsSinceLastToken = Math.floor((Date.now() - latestToken.createdAt.getTime()) / 1000);
+      if (secondsSinceLastToken < RESEND_VERIFICATION_COOLDOWN_SECONDS) {
+        this.logger.warn(
+          `Reenvío de verificación en cooldown para usuario ${user.id}: ${secondsSinceLastToken}s`,
+        );
+        return { message: genericMessage };
+      }
+    }
+
+    await this.verificationTokenRepo.update(
+      {
+        userId: user.id,
+        type: VerificationTokenType.EMAIL_VERIFICATION,
+        used: false,
+      },
+      {
+        used: true,
+        usedAt: new Date(),
+      },
+    );
+
+    const verificationToken = this.verificationTokenRepo.create({
+      userId: user.id,
+      token: uuidv4(),
+      type: VerificationTokenType.EMAIL_VERIFICATION,
+      expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_HOURS * 60 * 60 * 1000),
+    });
+    await this.verificationTokenRepo.save(verificationToken);
+
+    this.logger.log(`Nuevo token de verificación generado para usuario ${user.id}`);
+
+    return { message: genericMessage };
   }
 
   // ─── FORGOT PASSWORD ───────────────────────────────────────────────
@@ -448,5 +518,136 @@ export class AuthService {
       throw new NotFoundException('Usuario no encontrado');
     }
     return { role: user.role };
+  }
+
+  // ─── CREATE USER (admin) ──────────────────────────────────────────
+  async createAdminUser(data: {
+    email: string;
+    password: string;
+    role: string;
+  }): Promise<Partial<User>> {
+    const existing = await this.userRepo.findOne({ where: { email: data.email } });
+    if (existing) throw new ConflictException('El email ya está registrado');
+
+    if (!Object.values(UserRole).includes(data.role as UserRole)) {
+      throw new BadRequestException('Rol inválido');
+    }
+
+    const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
+    const user = this.userRepo.create({
+      email: data.email,
+      passwordHash,
+      role: data.role as UserRole,
+      isVerified: true,   // creado por admin, no requiere verificación por email
+      isActive: true,
+    });
+    const saved = await this.userRepo.save(user);
+    this.logger.log(`Usuario ${saved.id} (${saved.email}) creado por admin`);
+
+    return {
+      id: saved.id,
+      email: saved.email,
+      role: saved.role,
+      isActive: saved.isActive,
+      isVerified: saved.isVerified,
+      lastLogin: saved.lastLogin,
+      createdAt: saved.createdAt,
+    };
+  }
+
+  // ─── UPDATE USER (admin) ──────────────────────────────────────────
+  async updateAdminUser(
+    id: string,
+    data: { isActive?: boolean; role?: string; email?: string; password?: string },
+  ): Promise<Partial<User>> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    const updateData: Partial<User> = {};
+    if (data.isActive !== undefined) updateData.isActive = data.isActive;
+    if (data.role && Object.values(UserRole).includes(data.role as UserRole)) {
+      updateData.role = data.role as UserRole;
+    }
+    if (data.email && data.email !== user.email) {
+      const taken = await this.userRepo.findOne({ where: { email: data.email } });
+      if (taken) throw new ConflictException('El email ya está en uso');
+      updateData.email = data.email;
+      // Al cambiar email, se revoca sesión activa por seguridad
+      await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    }
+    if (data.password) {
+      updateData.passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
+      await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    }
+
+    await this.userRepo.update(id, updateData);
+
+    const updated = await this.userRepo
+      .createQueryBuilder('user')
+      .select(['user.id', 'user.email', 'user.role', 'user.isActive', 'user.isVerified', 'user.lastLogin', 'user.createdAt'])
+      .where('user.id = :id', { id })
+      .getOne();
+
+    this.logger.log(`Usuario ${id} actualizado por admin`);
+    return updated!;
+  }
+
+  // ─── DELETE USER (admin) ──────────────────────────────────────────
+  async deleteAdminUser(id: string): Promise<void> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    // Revocar tokens antes de eliminar (cascade debería hacerlo, pero por seguridad)
+    await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    await this.userRepo.delete(id);
+    this.logger.log(`Usuario ${id} (${user.email}) eliminado por admin`);
+  }
+
+  // ─── LIST ALL USERS (admin) ────────────────────────────────────────
+  async getAdminUsers(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    role?: string;
+    isActive?: string;
+  }): Promise<{
+    data: Partial<User>[];
+    meta: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+    const skip = (page - 1) * limit;
+
+    const qb = this.userRepo
+      .createQueryBuilder('user')
+      .select([
+        'user.id',
+        'user.email',
+        'user.role',
+        'user.isActive',
+        'user.isVerified',
+        'user.lastLogin',
+        'user.createdAt',
+      ])
+      .orderBy('user.createdAt', 'DESC');
+
+    if (query.search) {
+      qb.andWhere('user.email ILIKE :search', { search: `%${query.search}%` });
+    }
+
+    if (query.role) {
+      qb.andWhere('user.role = :role', { role: query.role });
+    }
+
+    if (query.isActive !== undefined && query.isActive !== '') {
+      qb.andWhere('user.isActive = :isActive', { isActive: query.isActive === 'true' });
+    }
+
+    const [data, total] = await qb.skip(skip).take(limit).getManyAndCount();
+
+    return {
+      data,
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
   }
 }

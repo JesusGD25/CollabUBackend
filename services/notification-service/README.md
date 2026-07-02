@@ -1,8 +1,95 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Notification Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
+Microservicio de notificaciones de **Collab-U**. Gestiona notificaciones in-app, preferencias de usuario, suscripciones push y cola de correos electrónicos.
+
+## Información General
+
+- **Puerto**: `3009`
+- **Base de datos**: `notification_db` (PostgreSQL, puerto 5435)
+- **Prefijo API pública**: `api/v1/notifications`
+- **Prefijo API interna**: `internal/notifications`
+
+## Endpoints
+
+### Públicos (`api/v1/notifications`) — requieren JWT
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/` | Listar mis notificaciones (paginado, filtrable) |
+| `GET` | `/unread-count` | Obtener conteo de no leídas |
+| `GET` | `/preferences` | Obtener preferencias del usuario |
+| `PATCH` | `/preferences` | Actualizar preferencias |
+| `PATCH` | `/read` | Marcar notificaciones como leídas (bulk o todas) |
+| `PATCH` | `/:id/read` | Marcar una notificación como leída |
+| `DELETE` | `/:id` | Eliminar una notificación |
+| `POST` | `/push-subscriptions` | Registrar suscripción push |
+| `DELETE` | `/push-subscriptions/:id` | Eliminar suscripción push |
+
+### Internos (`internal/notifications`) — sin autenticación (sólo red interna)
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/` | Crear notificación (usado por otros servicios) |
+| `GET` | `/user/:userId` | Listar notificaciones de un usuario |
+| `GET` | `/user/:userId/unread-count` | Conteo de no leídas |
+
+### Health
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/health` | Estado del servicio |
+
+## Entidades
+
+### `notifications`
+Notificaciones individuales para un usuario. Campos clave: `userId`, `type` (enum), `title`, `message`, `data` (jsonb), `channel`, `priority`, `isRead`, `readAt`, `actionUrl`, `groupKey`, `expiresAt`.
+
+### `notification_preferences`
+Preferencias por usuario (UNIQUE `userId`). Controla qué tipos y canales están habilitados. Soporta `quietHoursStart`/`quietHoursEnd`.
+
+### `email_queue`
+Cola de correos pendientes de envío. Soporta templates y envío programado (`scheduledFor`). Estados: `queued → sending → sent/failed/bounced`.
+
+### `notification_templates`
+Templates reutilizables con Handlebars. Asociados a un `notificationType`.
+
+### `push_subscriptions`
+Suscripciones Web Push por usuario. UNIQUE por `(userId, endpoint)`. Soporta `web`, `android`, `ios`.
+
+## Tipos de Notificación (NotificationType)
+
+```
+application_received, application_status_changed, application_accepted,
+application_rejected, interview_scheduled, interview_reminder,
+evaluation_pending, evaluation_completed, project_new,
+project_deadline_reminder, project_status_changed, match_recommendation,
+message_received, deliverable_feedback, company_verified, system_announcement
+```
+
+## Eventos RabbitMQ Consumidos
+
+| Evento | Notificación generada | Destinatario |
+|--------|-----------------------|--------------|
+| `application.created` | `application_received` | company user |
+| `application.status.changed` | `application_status_changed / application_accepted / application_rejected` | student user |
+| `evaluation.created` | `evaluation_pending` | evaluator |
+| `evaluation.completed` | `evaluation_completed` | evaluated user |
+| `matching.score.calculated` (isRecommended=true) | `match_recommendation` | student user |
+
+## Tests
+
+```bash
+npx jest --verbose --forceExit
+```
+
+**30 tests — 30 passing**
+
+- `notification.service.spec.ts` — 21 tests
+- `notification.controller.spec.ts` — 9 tests
+
+## Swagger
+
+Disponible en: `http://localhost:3009/api/docs`
 [circleci-url]: https://circleci.com/gh/nestjs/nest
 
   <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>

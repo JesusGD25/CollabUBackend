@@ -1,10 +1,24 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { RabbitMQModule } from '@collab-u/shared';
+
+import { databaseConfig } from './config/database.config';
+import { ChatModule } from './chat/chat.module';
+import { ChatEventsSubscriber } from './chat/chat-events.subscriber';
+import { HealthController } from './health/health.controller';
 
 @Module({
-  imports: [],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', '../../.env'],
+    }),
+    TypeOrmModule.forRoot(databaseConfig()),
+    RabbitMQModule.forRoot(),
+    ChatModule,
+  ],
+  controllers: [HealthController],
+  providers: [ChatEventsSubscriber],
 })
 export class AppModule {}

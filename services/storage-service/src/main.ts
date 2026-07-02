@@ -2,11 +2,11 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { GlobalHttpExceptionFilter } from '@collab-u/shared';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Validación global
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -16,17 +16,17 @@ async function bootstrap() {
     }),
   );
 
-  // Swagger
+  app.useGlobalFilters(new GlobalHttpExceptionFilter());
+
   const config = new DocumentBuilder()
     .setTitle('Collab-U Storage Service')
-    .setDescription('API para Storage Service')
+    .setDescription('Servicio de almacenamiento de archivos')
     .setVersion('1.0')
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  // Puerto
   const port = process.env.PORT || 3013;
   await app.listen(port);
   console.log(`Storage Service corriendo en puerto ${port}`);

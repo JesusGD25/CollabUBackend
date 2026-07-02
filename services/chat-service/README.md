@@ -1,13 +1,99 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Chat Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Microservicio de mensajería de **Collab-U**. Gestiona conversaciones directas, grupales y por proyecto, mensajes con paginación por cursor, reacciones, adjuntos y búsqueda full-text.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
+## Información General
+
+- **Puerto**: `3010`
+- **Base de datos**: `chat_db` (PostgreSQL, puerto 5435)
+- **Prefijo API pública**: `api/v1/chat`
+- **Prefijo API interna**: `internal/chat`
+
+## Endpoints
+
+### Públicos (`api/v1/chat`) — requieren JWT
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/conversations` | Listar mis conversaciones (paginado) |
+| `POST` | `/conversations` | Crear conversación (directa, grupal o por proyecto) |
+| `GET` | `/conversations/:id` | Detalle de una conversación |
+| `PUT` | `/conversations/:id/archive` | Archivar conversación |
+| `GET` | `/conversations/:id/messages` | Mensajes de una conversación (cursor-based) |
+| `POST` | `/conversations/:id/messages` | Enviar mensaje |
+| `PUT` | `/conversations/:id/read` | Marcar conversación como leída |
+| `PUT` | `/messages/:messageId` | Editar mensaje (ventana de 15 min) |
+| `DELETE` | `/messages/:messageId` | Eliminar mensaje (soft delete) |
+| `POST` | `/messages/:messageId/reactions/:emoji` | Agregar reacción |
+| `DELETE` | `/messages/:messageId/reactions/:emoji` | Eliminar reacción |
+| `GET` | `/search` | Buscar mensajes por texto |
+
+### Internos (`internal/chat`) — sin autenticación
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/conversations/project/:projectId` | Conversaciones de un proyecto |
+| `GET` | `/conversations/:conversationId/participants` | Participantes activos |
+
+### Health
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/health` | Estado del servicio |
+
+## Entidades
+
+### `conversations`
+Conversación entre usuarios. Tipos: `direct`, `group`, `project`. Campos clave: `type`, `name`, `projectId`, `isActive`, `lastMessageAt`, `lastMessagePreview`, `createdBy`.
+
+### `conversation_participants`
+Participantes de una conversación. Restricción `UNIQUE(conversation_id, user_id)`. Campos clave: `userId`, `role` (`member`, `admin`, `owner`), `isMuted`, `unreadCount`, `lastReadAt`, `lastReadMessageId`, `isActive`.
+
+### `messages`
+Mensajes de una conversación. Soporta respuestas anidadas (`replyToId`), edición (`isEdited`, `editedAt`) y borrado suave (`isDeleted`, `deletedAt`). Tipos: `text`, `file`, `image`, `system`, `link`.
+
+### `message_attachments`
+Archivos adjuntos a un mensaje. Campos: `fileUrl`, `fileName`, `fileSizeBytes`, `mimeType`, `thumbnailUrl`.
+
+### `message_reactions`
+Reacciones emoji a mensajes. Restricción `UNIQUE(message_id, user_id, emoji)`. Idempotente al agregar.
+
+## Enums
+
+- **ConversationType**: `direct`, `group`, `project`
+- **ParticipantRole**: `member`, `admin`, `owner`
+- **MessageType**: `text`, `file`, `image`, `system`, `link`
+
+## Eventos RabbitMQ
+
+### Publicados
+
+| Evento | Cuándo |
+|--------|--------|
+| `chat.conversation.created` | Al crear una conversación |
+| `chat.message.sent` | Al enviar un mensaje |
+
+### Consumidos
+
+| Evento | Cola | Acción |
+|--------|------|--------|
+| `application.status.changed` | `chat-service.application.status.changed` | Auto-crea conversación directa entre empresa y estudiante al aceptar una postulación |
+
+## Tests
+
+```bash
+npx jest --verbose --forceExit
+```
+
+**36 tests — 36 passing**
+
+- `chat.service.spec.ts` — 23 tests
+- `chat.controller.spec.ts` — 12 tests
+- `app.controller.spec.ts` — 1 test
+
+## Swagger
+
+Disponible en: `http://localhost:3010/api/docs`
 <a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
 <a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
 <a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>

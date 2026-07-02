@@ -1,10 +1,20 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { databaseConfig } from './config/database.config';
+import { MatchingModule } from './matching/matching.module';
+import { HealthController } from './health/health.controller';
+import { RabbitMQModule } from '@collab-u/shared';
 
 @Module({
-  imports: [],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    TypeOrmModule.forRoot(databaseConfig()),
+    RabbitMQModule.forRoot(),
+    MatchingModule,
+  ],
+  controllers: [HealthController],
+  providers: [],
 })
 export class AppModule {}
+
