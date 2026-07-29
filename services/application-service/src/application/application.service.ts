@@ -7,7 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindOptionsWhere, In, MoreThanOrEqual } from 'typeorm';
+import { Repository, FindOptionsWhere, In, MoreThanOrEqual, FindOperator } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -212,7 +212,7 @@ export class ApplicationService {
     companyId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status, minMatchScore, sortBy = 'appliedAt', sortDir = 'DESC' } = query;
+    const { page = 1, limit = 20, status, minMatchScore, sortBy = 'appliedAt', sortDir = 'DESC', projectId } = query;
 
     let projectIds: string[] = [];
     try {
@@ -229,7 +229,15 @@ export class ApplicationService {
       return { data: [], total: 0, page, limit, totalPages: 0 };
     }
 
-    const where: FindOptionsWhere<Application> = { projectId: In(projectIds) };
+    let targetProjectId: string | FindOperator<string> = In(projectIds);
+    if (projectId) {
+      if (!projectIds.includes(projectId)) {
+        return { data: [], total: 0, page, limit, totalPages: 0 };
+      }
+      targetProjectId = projectId;
+    }
+
+    const where: FindOptionsWhere<Application> = { projectId: targetProjectId };
     if (status) where.status = status;
     if (minMatchScore !== undefined) {
       where.matchScore = MoreThanOrEqual(minMatchScore);
