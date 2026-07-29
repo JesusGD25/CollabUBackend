@@ -7,7 +7,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindOptionsWhere, In, MoreThanOrEqual } from 'typeorm';
+import { Repository, FindOptionsWhere, In, MoreThanOrEqual, FindOperator } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Application, ApplicationStatus } from './entities/application.entity';
@@ -103,12 +103,20 @@ export class ApplicationService {
     dto: CreateApplicationDto,
   ): Promise<Application> {
     // 1. Verificar que el proyecto existe y está publicado
-    let projectData: { exists: boolean; companyId: string | null; status: string | null };
+    let projectData: {
+      exists: boolean;
+      companyId: string | null;
+      status: string | null;
+      minimumSemester: number | null;
+      academicPrograms: string[] | null;
+    };
     try {
       projectData = await this.httpClient.get<{
         exists: boolean;
         companyId: string | null;
         status: string | null;
+        minimumSemester: number | null;
+        academicPrograms: string[] | null;
       }>('project', `/internal/projects/${dto.projectId}/exists`);
     } catch (err) {
       this.logger.error(`Error verificando proyecto ${dto.projectId}: ${err.message}`);
@@ -121,6 +129,51 @@ export class ApplicationService {
 
     if (projectData.status !== 'published') {
       throw new BadRequestException('Solo puedes postularte a proyectos publicados');
+    }
+
+    // Obtener datos del estudiante si se requiere validar semestre o carrera
+    const requiresSemesterCheck = projectData.minimumSemester && projectData.minimumSemester > 0;
+    const requiresProgramCheck = projectData.academicPrograms && projectData.academicPrograms.length > 0;
+
+    if (requiresSemesterCheck || requiresProgramCheck) {
+      let studentSemester: number | null = null;
+      let studentProgram: string | null = null;
+      try {
+        const studentData = await this.httpClient.get<{ semester?: number; program?: string }>(
+          'student',
+          `/internal/students/${studentId}/matching-data`,
+        );
+        studentSemester = studentData?.semester ?? null;
+        studentProgram = studentData?.program ?? null;
+      } catch (err) {
+        this.logger.warn(`No se pudo obtener perfil del estudiante ${studentId}: ${err.message}`);
+      }
+
+      // Validar semestre mínimo
+      if (requiresSemesterCheck && studentSemester !== null && studentSemester < projectData.minimumSemester!) {
+        throw new BadRequestException(
+          `No cumples con el semestre mínimo requerido (${projectData.minimumSemester}°) para postularte a este proyecto. Tu semestre actual es ${studentSemester}°.`,
+        );
+      }
+
+      // Validar carrera / programa académico
+      if (requiresProgramCheck && studentProgram) {
+        const normStudentProgram = studentProgram.toLowerCase().trim();
+        const isProgramMatched = projectData.academicPrograms!.some((prog) => {
+          const normReqProgram = prog.toLowerCase().trim();
+          return (
+            normReqProgram === normStudentProgram ||
+            normStudentProgram.includes(normReqProgram) ||
+            normReqProgram.includes(normStudentProgram)
+          );
+        });
+
+        if (!isProgramMatched) {
+          throw new BadRequestException(
+            `Este proyecto está dirigido únicamente a los programas: ${projectData.academicPrograms!.join(', ')}. Tu programa registrado es "${studentProgram}".`,
+          );
+        }
+      }
     }
 
     // 2. Evitar postulación duplicada (UNIQUE constraint como backup)
@@ -212,7 +265,7 @@ export class ApplicationService {
     companyId: string,
     query: ApplicationQueryDto,
   ): Promise<PaginatedApplicationsResponse> {
-    const { page = 1, limit = 20, status, minMatchScore, sortBy = 'appliedAt', sortDir = 'DESC' } = query;
+    const { page = 1, limit = 20, status, minMatchScore, sortBy = 'appliedAt', sortDir = 'DESC', projectId } = query;
 
     let projectIds: string[] = [];
     try {
@@ -229,7 +282,15 @@ export class ApplicationService {
       return { data: [], total: 0, page, limit, totalPages: 0 };
     }
 
-    const where: FindOptionsWhere<Application> = { projectId: In(projectIds) };
+    let targetProjectId: string | FindOperator<string> = In(projectIds);
+    if (projectId) {
+      if (!projectIds.includes(projectId)) {
+        return { data: [], total: 0, page, limit, totalPages: 0 };
+      }
+      targetProjectId = projectId;
+    }
+
+    const where: FindOptionsWhere<Application> = { projectId: targetProjectId };
     if (status) where.status = status;
     if (minMatchScore !== undefined) {
       where.matchScore = MoreThanOrEqual(minMatchScore);

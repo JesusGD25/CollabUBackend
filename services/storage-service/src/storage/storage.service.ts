@@ -141,6 +141,11 @@ export class StorageService {
 
     const saved = await this.fileRepo.save(storedFile);
 
+    if (saved.isPublic && !saved.publicUrl) {
+      saved.publicUrl = `/api/v1/storage/files/${saved.id}/download`;
+      await this.fileRepo.update(saved.id, { publicUrl: saved.publicUrl });
+    }
+
     // Update quota
     quota.usedStorageBytes = Number(quota.usedStorageBytes) + file.size;
     quota.totalFiles += 1;
