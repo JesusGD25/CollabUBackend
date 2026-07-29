@@ -119,6 +119,7 @@ export class ProjectService {
       location: dto.location,
       compensationType: dto.compensationType,
       compensationAmount: dto.compensationAmount,
+      currency: dto.currency,
       positionsAvailable: dto.positionsAvailable,
       applicationDeadline: dto.applicationDeadline ? new Date(dto.applicationDeadline) : undefined,
       academicPrograms: dto.academicPrograms,

@@ -74,6 +74,10 @@ export class CreateProjectDto {
   compensationAmount?: number;
 
   @IsOptional()
+  @IsString()
+  currency?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   positionsAvailable?: number;
