@@ -748,12 +748,12 @@ export class ProjectService {
     this.logger.log(`Proyecto ${projectId} iniciado por asignación de supervisor`);
   }
 
-  async projectExists(projectId: string): Promise<{ exists: boolean; companyId: string | null; status: string | null }> {
+  async projectExists(projectId: string): Promise<{ exists: boolean; companyId: string | null; status: string | null; minimumSemester: number | null }> {
     const project = await this.projectRepo.findOne({ where: { id: projectId } });
     if (!project) {
-      return { exists: false, companyId: null, status: null };
+      return { exists: false, companyId: null, status: null, minimumSemester: null };
     }
-    return { exists: true, companyId: project.companyId, status: project.status };
+    return { exists: true, companyId: project.companyId, status: project.status, minimumSemester: project.minimumSemester ?? null };
   }
 
   async incrementApplications(projectId: string): Promise<void> {

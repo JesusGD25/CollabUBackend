@@ -103,12 +103,18 @@ export class ApplicationService {
     dto: CreateApplicationDto,
   ): Promise<Application> {
     // 1. Verificar que el proyecto existe y está publicado
-    let projectData: { exists: boolean; companyId: string | null; status: string | null };
+    let projectData: {
+      exists: boolean;
+      companyId: string | null;
+      status: string | null;
+      minimumSemester: number | null;
+    };
     try {
       projectData = await this.httpClient.get<{
         exists: boolean;
         companyId: string | null;
         status: string | null;
+        minimumSemester: number | null;
       }>('project', `/internal/projects/${dto.projectId}/exists`);
     } catch (err) {
       this.logger.error(`Error verificando proyecto ${dto.projectId}: ${err.message}`);
@@ -121,6 +127,26 @@ export class ApplicationService {
 
     if (projectData.status !== 'published') {
       throw new BadRequestException('Solo puedes postularte a proyectos publicados');
+    }
+
+    // Validar semestre mínimo si el proyecto lo requiere
+    if (projectData.minimumSemester && projectData.minimumSemester > 0) {
+      let studentSemester: number | null = null;
+      try {
+        const studentData = await this.httpClient.get<{ semester?: number }>(
+          'student',
+          `/internal/students/${studentId}/matching-data`,
+        );
+        studentSemester = studentData?.semester ?? null;
+      } catch (err) {
+        this.logger.warn(`No se pudo obtener semestre del estudiante ${studentId}: ${err.message}`);
+      }
+
+      if (studentSemester !== null && studentSemester < projectData.minimumSemester) {
+        throw new BadRequestException(
+          `No cumples con el semestre mínimo requerido (${projectData.minimumSemester}°) para postularte a este proyecto. Tu semestre actual es ${studentSemester}°.`,
+        );
+      }
     }
 
     // 2. Evitar postulación duplicada (UNIQUE constraint como backup)
