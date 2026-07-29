@@ -108,6 +108,7 @@ export class ApplicationService {
       companyId: string | null;
       status: string | null;
       minimumSemester: number | null;
+      academicPrograms: string[] | null;
     };
     try {
       projectData = await this.httpClient.get<{
@@ -115,6 +116,7 @@ export class ApplicationService {
         companyId: string | null;
         status: string | null;
         minimumSemester: number | null;
+        academicPrograms: string[] | null;
       }>('project', `/internal/projects/${dto.projectId}/exists`);
     } catch (err) {
       this.logger.error(`Error verificando proyecto ${dto.projectId}: ${err.message}`);
@@ -129,23 +131,48 @@ export class ApplicationService {
       throw new BadRequestException('Solo puedes postularte a proyectos publicados');
     }
 
-    // Validar semestre mínimo si el proyecto lo requiere
-    if (projectData.minimumSemester && projectData.minimumSemester > 0) {
+    // Obtener datos del estudiante si se requiere validar semestre o carrera
+    const requiresSemesterCheck = projectData.minimumSemester && projectData.minimumSemester > 0;
+    const requiresProgramCheck = projectData.academicPrograms && projectData.academicPrograms.length > 0;
+
+    if (requiresSemesterCheck || requiresProgramCheck) {
       let studentSemester: number | null = null;
+      let studentProgram: string | null = null;
       try {
-        const studentData = await this.httpClient.get<{ semester?: number }>(
+        const studentData = await this.httpClient.get<{ semester?: number; program?: string }>(
           'student',
           `/internal/students/${studentId}/matching-data`,
         );
         studentSemester = studentData?.semester ?? null;
+        studentProgram = studentData?.program ?? null;
       } catch (err) {
-        this.logger.warn(`No se pudo obtener semestre del estudiante ${studentId}: ${err.message}`);
+        this.logger.warn(`No se pudo obtener perfil del estudiante ${studentId}: ${err.message}`);
       }
 
-      if (studentSemester !== null && studentSemester < projectData.minimumSemester) {
+      // Validar semestre mínimo
+      if (requiresSemesterCheck && studentSemester !== null && studentSemester < projectData.minimumSemester!) {
         throw new BadRequestException(
           `No cumples con el semestre mínimo requerido (${projectData.minimumSemester}°) para postularte a este proyecto. Tu semestre actual es ${studentSemester}°.`,
         );
+      }
+
+      // Validar carrera / programa académico
+      if (requiresProgramCheck && studentProgram) {
+        const normStudentProgram = studentProgram.toLowerCase().trim();
+        const isProgramMatched = projectData.academicPrograms!.some((prog) => {
+          const normReqProgram = prog.toLowerCase().trim();
+          return (
+            normReqProgram === normStudentProgram ||
+            normStudentProgram.includes(normReqProgram) ||
+            normReqProgram.includes(normStudentProgram)
+          );
+        });
+
+        if (!isProgramMatched) {
+          throw new BadRequestException(
+            `Este proyecto está dirigido únicamente a los programas: ${projectData.academicPrograms!.join(', ')}. Tu programa registrado es "${studentProgram}".`,
+          );
+        }
       }
     }
 
