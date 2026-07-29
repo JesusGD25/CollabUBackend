@@ -67,11 +67,10 @@ export class UsersController {
   @Post('profile/avatar')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Subir avatar (TODO: integrar con Storage)' })
-  @ApiResponse({ status: 200, description: 'Avatar subido' })
-  async uploadAvatar(@Request() req: any) {
-    // TODO: Integrar con Storage Service en Sprint posterior
-    return { message: 'Funcionalidad pendiente de integración con Storage Service' };
+  @ApiOperation({ summary: 'Actualizar avatar del usuario' })
+  @ApiResponse({ status: 200, description: 'Avatar actualizado' })
+  async uploadAvatar(@Request() req: any, @Body('avatarUrl') avatarUrl: string) {
+    return this.usersService.updateProfile(req.user.id, { avatarUrl });
   }
 
   @Delete('profile/avatar')
@@ -80,7 +79,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Eliminar avatar' })
   @ApiResponse({ status: 200, description: 'Avatar eliminado' })
   async deleteAvatar(@Request() req: any) {
-    return this.usersService.updateProfile(req.user.id, { avatarUrl: undefined } as any);
+    return this.usersService.updateProfile(req.user.id, { avatarUrl: null as any });
   }
 
   @Get('settings')

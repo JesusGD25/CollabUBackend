@@ -90,7 +90,7 @@ export class StorageController {
 
     res.set({
       'Content-Type': file.mimeType,
-      'Content-Disposition': `attachment; filename="${file.originalName}"`,
+      'Content-Disposition': `inline; filename="${file.originalName}"`,
       'Content-Length': file.fileSizeBytes.toString(),
     });
 

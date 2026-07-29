@@ -87,4 +87,10 @@ export class UpdateUserProfileDto {
   @IsUrl({}, { message: 'Debe ser una URL válida de LinkedIn' })
   @MaxLength(500)
   linkedinUrl?: string;
+
+  @ApiPropertyOptional({ example: 'http://localhost:3013/api/v1/storage/files/.../download' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  avatarUrl?: string;
 }
