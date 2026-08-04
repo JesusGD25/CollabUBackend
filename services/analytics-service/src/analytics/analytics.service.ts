@@ -215,14 +215,25 @@ export class AnalyticsService {
     });
   }
 
-  async getStudentMetricsSummary(studentId: string): Promise<StudentMetrics> {
+  async getStudentMetricsSummary(studentId: string): Promise<Partial<StudentMetrics>> {
     const metrics = await this.studentMetricsRepo.findOne({
       where: { studentId },
       order: { snapshotDate: 'DESC' },
     });
 
     if (!metrics) {
-      throw new NotFoundException(`No hay métricas para el estudiante ${studentId}`);
+      return {
+        studentId,
+        totalApplications: 0,
+        acceptedCount: 0,
+        rejectedCount: 0,
+        totalProjectsCompleted: 0,
+        avgMatchScore: null,
+        avgEvaluationScore: null,
+        profileCompleteness: 0,
+        skillsCount: 0,
+        responseRate: null,
+      };
     }
 
     return metrics;
@@ -263,14 +274,24 @@ export class AnalyticsService {
     });
   }
 
-  async getCompanyMetricsSummary(companyId: string): Promise<CompanyMetrics> {
+  async getCompanyMetricsSummary(companyId: string): Promise<Partial<CompanyMetrics>> {
     const metrics = await this.companyMetricsRepo.findOne({
       where: { companyId },
       order: { snapshotDate: 'DESC' },
     });
 
     if (!metrics) {
-      throw new NotFoundException(`No hay métricas para la empresa ${companyId}`);
+      return {
+        companyId,
+        totalProjects: 0,
+        activeProjects: 0,
+        totalApplicationsReceived: 0,
+        avgTimeToRespondHours: null,
+        avgEvaluationGiven: null,
+        avgEvaluationReceived: null,
+        totalStudentsHired: 0,
+        completionRate: null,
+      };
     }
 
     return metrics;
