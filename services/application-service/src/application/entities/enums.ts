@@ -34,3 +34,12 @@ export enum DeliverableStatus {
   REJECTED = 'rejected',
   NEEDS_REVISION = 'needs_revision',
 }
+
+export enum DeliverableType {
+  REPORT = 'report',
+  PRESENTATION = 'presentation',
+  CODE = 'code',
+  DOCUMENT = 'document',
+  VIDEO = 'video',
+  OTHER = 'other',
+}

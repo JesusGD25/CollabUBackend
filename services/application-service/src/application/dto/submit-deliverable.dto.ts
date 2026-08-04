@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsUrl, IsUUID, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsUUID, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class SubmitDeliverableDto {
@@ -14,7 +14,7 @@ export class SubmitDeliverableDto {
 
   @ApiPropertyOptional({ description: 'URL del archivo subido en Storage Service' })
   @IsOptional()
-  @IsUrl()
+  @IsString()
   fileUrl?: string;
 
   @ApiPropertyOptional({ description: 'UUID del entregable del proyecto al que corresponde' })
