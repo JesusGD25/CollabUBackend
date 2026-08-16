@@ -3,7 +3,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateApplicationDto {
   @ApiProperty({ description: 'UUID del proyecto al que se postula' })
-  @IsUUID('4')
+  @IsUUID()
   projectId: string;
 
   @ApiPropertyOptional({ description: 'Carta de presentación (mínimo 50 caracteres)', minLength: 50 })

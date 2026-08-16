@@ -10,7 +10,7 @@ import {
 import slugify from 'slugify';
 import { ProjectRequirement } from './project-requirement.entity';
 import { ProjectDeliverable } from './project-deliverable.entity';
-import { ProjectTag } from './project-tag.entity';
+import { ProjectSkill } from './project-skill.entity';
 import { ProjectActivity } from './project-activity.entity';
 
 export enum ProjectType {
@@ -23,6 +23,7 @@ export enum ProjectType {
 
 export enum ProjectStatus {
   DRAFT = 'draft',
+  NEEDS_CHANGES = 'needs_changes',
   PENDING_APPROVAL = 'pending_approval',
   PUBLISHED = 'published',
   IN_PROGRESS = 'in_progress',
@@ -111,8 +112,13 @@ export class Project {
   @Column({ name: 'application_deadline', type: 'date', nullable: true })
   applicationDeadline: Date;
 
+  /** IDs de programas académicos (admin-service) — antes texto libre, ahora UUIDs. */
   @Column({ name: 'academic_programs', type: 'simple-array', nullable: true })
   academicPrograms: string[];
+
+  /** Documento formal de solicitud, requerido para enviar a revisión. Ref al Storage Service. */
+  @Column({ name: 'request_document_file_id', type: 'uuid', nullable: true })
+  requestDocumentFileId: string | null;
 
   @Column({ name: 'minimum_semester', nullable: true })
   minimumSemester: number;
@@ -129,6 +135,22 @@ export class Project {
   @Column({ name: 'applications_count', default: 0 })
   applicationsCount: number;
 
+  // ── Revisión institucional (Facultad) ──
+  @Column({ name: 'faculty_review_notes', type: 'text', nullable: true })
+  facultyReviewNotes: string | null;
+
+  @Column({ name: 'faculty_rejection_categories', type: 'simple-array', nullable: true })
+  facultyRejectionCategories: string[] | null;
+
+  @Column({ name: 'faculty_reviewer_id', type: 'uuid', nullable: true })
+  facultyReviewerId: string | null;
+
+  @Column({ name: 'faculty_reviewed_at', type: 'timestamptz', nullable: true })
+  facultyReviewedAt: Date | null;
+
+  @Column({ name: 'submitted_for_review_at', type: 'timestamptz', nullable: true })
+  submittedForReviewAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 
@@ -141,8 +163,8 @@ export class Project {
   @OneToMany(() => ProjectDeliverable, (del) => del.project)
   deliverables: ProjectDeliverable[];
 
-  @OneToMany(() => ProjectTag, (tag) => tag.project)
-  tags: ProjectTag[];
+  @OneToMany(() => ProjectSkill, (skill) => skill.project)
+  skills: ProjectSkill[];
 
   @OneToMany(() => ProjectActivity, (activity) => activity.project)
   activities: ProjectActivity[];

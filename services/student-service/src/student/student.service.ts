@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { StudentProfile } from './entities/student-profile.entity';
 import { Skill } from './entities/skill.entity';
@@ -47,6 +47,7 @@ export class StudentService {
     @InjectRepository(Language) private languageRepo: Repository<Language>,
     @InjectRepository(Interest) private interestRepo: Repository<Interest>,
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
   // ── PERFIL ──
@@ -208,9 +209,30 @@ export class StudentService {
     });
   }
 
+  /** Resuelve nombres de habilidad contra el catálogo maestro (admin-service) por nombre normalizado. */
+  private async resolveCatalogSkillIds(names: string[]): Promise<Map<string, string | null>> {
+    if (!names.length) return new Map();
+    try {
+      const results = await this.httpClient.post<{ name: string; skillId: string | null }[]>(
+        'admin',
+        '/internal/admin/skills/by-names',
+        { names },
+      );
+      return new Map(results.map((r) => [r.name, r.skillId]));
+    } catch (err) {
+      this.logger.warn(`No se pudo resolver catálogo de habilidades: ${err.message}`);
+      return new Map();
+    }
+  }
+
   async addSkill(userId: string, dto: CreateSkillDto): Promise<Skill> {
     const profile = await this.findProfileByUserId(userId);
-    const skill = this.skillRepo.create({ ...dto, studentId: profile.id });
+    let catalogSkillId = dto.catalogSkillId ?? null;
+    if (!catalogSkillId) {
+      const resolved = await this.resolveCatalogSkillIds([dto.name]);
+      catalogSkillId = resolved.get(dto.name) ?? null;
+    }
+    const skill = this.skillRepo.create({ ...dto, catalogSkillId, studentId: profile.id });
     const saved = await this.skillRepo.save(skill);
     await this.recalculateCompleteness(userId);
     return saved;
@@ -221,6 +243,10 @@ export class StudentService {
     const skill = await this.skillRepo.findOne({ where: { id: skillId, studentId: profile.id } });
     if (!skill) {
       throw new NotFoundException('Habilidad no encontrada');
+    }
+    if (dto.name && dto.name !== skill.name) {
+      const resolved = await this.resolveCatalogSkillIds([dto.name]);
+      skill.catalogSkillId = resolved.get(dto.name) ?? null;
     }
     Object.assign(skill, dto);
     return this.skillRepo.save(skill);
@@ -238,7 +264,15 @@ export class StudentService {
 
   async addSkillsBatch(userId: string, dtos: CreateSkillDto[]): Promise<Skill[]> {
     const profile = await this.findProfileByUserId(userId);
-    const skills = dtos.map((dto) => this.skillRepo.create({ ...dto, studentId: profile.id }));
+    const namesToResolve = dtos.filter((d) => !d.catalogSkillId).map((d) => d.name);
+    const resolved = await this.resolveCatalogSkillIds(namesToResolve);
+    const skills = dtos.map((dto) =>
+      this.skillRepo.create({
+        ...dto,
+        catalogSkillId: dto.catalogSkillId ?? resolved.get(dto.name) ?? null,
+        studentId: profile.id,
+      }),
+    );
     const saved = await this.skillRepo.save(skills);
     await this.recalculateCompleteness(userId);
     return saved;
@@ -443,11 +477,13 @@ export class StudentService {
     }
     return {
       studentId: profile.id,
+      userId: profile.userId,
       program: profile.program,
       semester: profile.semester,
       availability: profile.availability,
       skills: (profile.skills || []).map((s) => ({
         name: s.name,
+        catalogSkillId: s.catalogSkillId,
         category: s.category,
         proficiencyLevel: s.proficiencyLevel,
       })),
@@ -510,11 +546,8 @@ export class StudentService {
     const hasStudentCode = !!profile.studentCode?.trim();
     const hasBio = !!profile.bio?.trim();
     const hasSkill = (profile.skills?.length ?? 0) > 0;
-    const hasExperienceOrEducation =
-      (profile.experiences?.length ?? 0) > 0 ||
-      (profile.education?.length ?? 0) > 0;
 
-    return hasProgram && hasSemester && hasStudentCode && hasBio && hasSkill && hasExperienceOrEducation;
+    return hasProgram && hasSemester && hasStudentCode && hasBio && hasSkill;
   }
 
   private async publishProfileUpdated(profile: StudentProfile): Promise<void> {

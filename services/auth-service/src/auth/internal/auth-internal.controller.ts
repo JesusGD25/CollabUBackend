@@ -1,11 +1,19 @@
 import { Controller, Get, Param, Post, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { AuthService } from '../auth.service';
+import { UserRole } from '@collab-u/shared';
 
 @ApiTags('Auth Internal')
 @Controller('internal/auth')
 export class AuthInternalController {
   constructor(private readonly authService: AuthService) {}
+
+  @Get('users/by-role/:role')
+  @ApiOperation({ summary: 'Obtener usuarios activos por rol (inter-servicio)' })
+  @ApiResponse({ status: 200, description: 'Lista de usuarios con ese rol' })
+  async getUsersByRole(@Param('role') role: UserRole) {
+    return this.authService.getUsersByRole(role);
+  }
 
   @Post('validate')
   @ApiOperation({ summary: 'Validar token JWT (inter-servicio)' })

@@ -31,7 +31,8 @@ import {
   UpdateRequirementDto,
   AddProjectDeliverableDto,
   UpdateDeliverableDto,
-  CreateTagDto,
+  CreateProjectSkillDto,
+  UpdateProjectSkillDto,
   ProjectSearchQueryDto,
   CreateActivityDto,
   UpdateActivityDto,
@@ -96,14 +97,15 @@ export class ProjectController {
   }
 
   @Get(':projectId')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Obtener proyecto por ID' })
+  @ApiOperation({ summary: 'Obtener proyecto por ID (público si está publicado; borradores solo visibles para su dueño o admin)' })
   @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Proyecto obtenido' })
   @ApiResponse({ status: 404, description: 'Proyecto no encontrado' })
-  async getProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    return this.projectService.getProjectById(projectId, true);
+  async getProject(
+    @CurrentUser() user: any,
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+  ) {
+    return this.projectService.getProjectById(projectId, true, user?.id, user?.role);
   }
 
   @Patch(':projectId')
@@ -268,37 +270,62 @@ export class ProjectController {
     await this.projectService.deleteDeliverable(projectId, delId, user.userId);
   }
 
-  // ── TAGS ──
+  // ── HABILIDADES ──
 
-  @Post(':projectId/tags')
+  @Get(':projectId/skills')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Listar habilidades requeridas del proyecto' })
+  @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
+  async getSkills(@Param('projectId', ParseUUIDPipe) projectId: string) {
+    return this.projectService.getSkills(projectId);
+  }
+
+  @Post(':projectId/skills')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.COMPANY)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Agregar tags al proyecto' })
+  @ApiOperation({ summary: 'Agregar habilidad requerida al proyecto' })
   @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
-  @ApiResponse({ status: 201, description: 'Tags agregados' })
-  async addTags(
+  @ApiResponse({ status: 201, description: 'Habilidad agregada' })
+  async addSkill(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @CurrentUser() user: any,
-    @Body() dto: CreateTagDto,
+    @Body() dto: CreateProjectSkillDto,
   ) {
-    return this.projectService.addTags(projectId, user.userId, dto.tags);
+    return this.projectService.addSkill(projectId, user.userId, dto);
   }
 
-  @Delete(':projectId/tags/:tagId')
+  @Patch(':projectId/skills/:skillId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Actualizar habilidad requerida del proyecto' })
+  @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
+  @ApiParam({ name: 'skillId', type: 'string', format: 'uuid' })
+  async updateSkill(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('skillId', ParseUUIDPipe) skillId: string,
+    @CurrentUser() user: any,
+    @Body() dto: UpdateProjectSkillDto,
+  ) {
+    return this.projectService.updateSkill(projectId, skillId, user.userId, dto);
+  }
+
+  @Delete(':projectId/skills/:skillId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.COMPANY)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Eliminar tag' })
+  @ApiOperation({ summary: 'Eliminar habilidad requerida del proyecto' })
   @ApiParam({ name: 'projectId', type: 'string', format: 'uuid' })
-  @ApiParam({ name: 'tagId', type: 'string', format: 'uuid' })
-  async deleteTag(
+  @ApiParam({ name: 'skillId', type: 'string', format: 'uuid' })
+  async deleteSkill(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Param('tagId', ParseUUIDPipe) tagId: string,
+    @Param('skillId', ParseUUIDPipe) skillId: string,
     @CurrentUser() user: any,
   ) {
-    await this.projectService.deleteTag(projectId, tagId, user.userId);
+    await this.projectService.deleteSkill(projectId, skillId, user.userId);
   }
 
   // ── ACTIVIDADES ──
@@ -361,13 +388,22 @@ export class ProjectController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Aprobar o rechazar un proyecto (solo admin)' })
+  @ApiOperation({ summary: 'Aprobar, rechazar o solicitar cambios a un proyecto (solo admin)' })
   @ApiResponse({ status: 200, description: 'Proyecto revisado' })
   @ApiResponse({ status: 404, description: 'Proyecto no encontrado' })
   async reviewProject(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    @Body() body: { action: 'approve' | 'reject'; reason?: string },
+    @CurrentUser() user: any,
+    @Body()
+    body: {
+      action: 'approve' | 'needs_changes' | 'reject';
+      notes?: string;
+      categories?: string[];
+    },
   ) {
-    return this.projectService.reviewProject(projectId, body.action, body.reason);
+    return this.projectService.reviewProject(projectId, user.userId, body.action, {
+      notes: body.notes,
+      categories: body.categories,
+    });
   }
 }

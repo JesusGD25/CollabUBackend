@@ -9,10 +9,17 @@ import {
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { ApplicationService } from './application.service';
+import { ProjectAccessService } from './project-access.service';
 import { Application, ApplicationStatus } from './entities/application.entity';
 import { ApplicationTimeline } from './entities/application-timeline.entity';
 import { Interview, InterviewStatus, InterviewType } from './entities/interview.entity';
 import { StudentDeliverable, DeliverableStatus } from './entities/student-deliverable.entity';
+import { DeliverableAttachment } from './entities/deliverable-attachment.entity';
+import { ProjectDocument } from './entities/project-document.entity';
+import { AcademicSubmission } from './entities/academic-submission.entity';
+import { SubmissionHistory } from './entities/submission-history.entity';
+import { ProjectAcademicRecord } from './entities/project-academic-record.entity';
+import { DeliverableComment } from './entities/deliverable-comment.entity';
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -21,6 +28,17 @@ const mockHttpClient = {
   get: jest.fn(),
   post: jest.fn(),
   patch: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockProjectAccess = {
+  resolveViewer: jest.fn(),
+  assertAccess: jest.fn(),
+  assertPermission: jest.fn(),
+  sanitizeApplication: jest.fn((app: any) => app),
+  resolveStage: jest.fn().mockReturnValue({ current: 'development', completed: [], waitingOn: null }),
+  getParticipants: jest.fn().mockResolvedValue([]),
+  getProject: jest.fn().mockResolvedValue(null),
+  getAssignments: jest.fn().mockResolvedValue([]),
 };
 
 const createMockRepo = () => ({
@@ -123,6 +141,11 @@ describe('ApplicationService', () => {
   let timelineRepo: any;
   let interviewRepo: any;
   let deliverableRepo: any;
+  let documentRepo: any;
+  let submissionRepo: any;
+  let submissionHistoryRepo: any;
+  let academicRecordRepo: any;
+  let deliverableCommentRepo: any;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -132,8 +155,15 @@ describe('ApplicationService', () => {
         { provide: getRepositoryToken(ApplicationTimeline), useFactory: createMockRepo },
         { provide: getRepositoryToken(Interview), useFactory: createMockRepo },
         { provide: getRepositoryToken(StudentDeliverable), useFactory: createMockRepo },
+        { provide: getRepositoryToken(DeliverableAttachment), useFactory: createMockRepo },
+        { provide: getRepositoryToken(ProjectDocument), useFactory: createMockRepo },
+        { provide: getRepositoryToken(AcademicSubmission), useFactory: createMockRepo },
+        { provide: getRepositoryToken(SubmissionHistory), useFactory: createMockRepo },
+        { provide: getRepositoryToken(ProjectAcademicRecord), useFactory: createMockRepo },
+        { provide: getRepositoryToken(DeliverableComment), useFactory: createMockRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
         { provide: MicroserviceHttpClient, useValue: mockHttpClient },
+        { provide: ProjectAccessService, useValue: mockProjectAccess },
       ],
     }).compile();
 
@@ -142,6 +172,10 @@ describe('ApplicationService', () => {
     timelineRepo = module.get(getRepositoryToken(ApplicationTimeline));
     interviewRepo = module.get(getRepositoryToken(Interview));
     deliverableRepo = module.get(getRepositoryToken(StudentDeliverable));
+    documentRepo = module.get(getRepositoryToken(ProjectDocument));
+    submissionRepo = module.get(getRepositoryToken(AcademicSubmission));
+    submissionHistoryRepo = module.get(getRepositoryToken(SubmissionHistory));
+    academicRecordRepo = module.get(getRepositoryToken(ProjectAcademicRecord));
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -349,8 +383,8 @@ describe('ApplicationService', () => {
     });
 
     it('debería lanzar BadRequestException si la postulación no está en estado adecuado', async () => {
-      const app = makeApplication({ status: ApplicationStatus.PENDING });
-      applicationRepo.findOne.mockResolvedValueOnce(app);
+      const app = makeApplication({ status: ApplicationStatus.REJECTED });
+      applicationRepo.findOne.mockResolvedValue(app);
       await expect(
         service.scheduleInterview(APP_ID, COMPANY_ID, {
           scheduledAt: new Date().toISOString(),
@@ -373,6 +407,7 @@ describe('ApplicationService', () => {
       const result = await service.completeInterview(APP_ID, 'interview-uuid-1', COMPANY_ID, {
         score: 90,
         interviewerNotes: 'Excelente candidato',
+        resolution: 'passed' as any,
       });
       expect(interviewRepo.save).toHaveBeenCalled();
     });
@@ -523,6 +558,199 @@ describe('ApplicationService', () => {
       applicationRepo.count.mockResolvedValue(2);
       const result = await service.countActiveByStudent(STUDENT_ID);
       expect(result).toBe(2);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ANTEPROYECTO
+  // ═══════════════════════════════════════════════════════════════════
+  describe('submitAnteproyecto', () => {
+    it('debería rechazar si el estudiante no es dueño de la postulación', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      await expect(
+        service.submitAnteproyecto(APP_ID, 'otro-estudiante', { fileId: 'file-1' }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('primera entrega marca SUBMITTED e incrementa versión', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'pending_submission', versionNumber: 0, correctionCount: 0,
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      mockHttpClient.get.mockResolvedValue(null);
+
+      const result = await service.submitAnteproyecto(APP_ID, STUDENT_ID, { fileId: 'file-1' });
+
+      expect(result.status).toBe('submitted');
+      expect(result.versionNumber).toBe(1);
+      expect(submissionHistoryRepo.save).toHaveBeenCalled();
+    });
+
+    it('re-entrega desde needs_revision marca REVISED', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'needs_revision', versionNumber: 1, correctionCount: 1,
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      mockHttpClient.get.mockResolvedValue(null);
+
+      const result = await service.submitAnteproyecto(APP_ID, STUDENT_ID, { fileId: 'file-2' });
+
+      expect(result.status).toBe('revised');
+      expect(result.versionNumber).toBe(2);
+    });
+
+    it('debería rechazar entrega en estado no válido (approved)', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      submissionRepo.findOne.mockResolvedValue({ id: 'sub-1', applicationId: APP_ID, status: 'approved', versionNumber: 1 });
+
+      await expect(
+        service.submitAnteproyecto(APP_ID, STUDENT_ID, { fileId: 'file-3' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('reviewAnteproyecto', () => {
+    const juradoAssignment = [{ id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado', role: 'jurado_anteproyecto', status: 'accepted' }];
+
+    it('debería rechazar si el usuario no es jurado de esta aplicación', async () => {
+      mockHttpClient.get.mockResolvedValue([]);
+      await expect(
+        service.reviewAnteproyecto(APP_ID, 'faculty-x', { action: 'approve' as any }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('no puede rechazar sin al menos 2 correcciones previas', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(juradoAssignment)
+        .mockResolvedValueOnce({ value: 2 });
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'submitted', correctionCount: 0,
+      });
+
+      await expect(
+        service.reviewAnteproyecto(APP_ID, 'faculty-jurado', { action: 'reject' as any, comment: 'no sirve' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('correction incrementa correctionCount y pasa a NEEDS_REVISION', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(juradoAssignment)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce({ value: 5 })
+        .mockResolvedValueOnce({ value: [] });
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'submitted', correctionCount: 0,
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado', { action: 'correction' as any, comment: 'corrige esto' });
+
+      expect(result.status).toBe('needs_revision');
+      expect(result.correctionCount).toBe(1);
+    });
+
+    it('approve mueve el academic record a WAITING_DOCUMENTS y publica evento', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(juradoAssignment)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(juradoAssignment)
+        .mockResolvedValueOnce(juradoAssignment);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'revised', correctionCount: 2,
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      academicRecordRepo.findOne.mockResolvedValue({ id: 'rec-1', applicationId: APP_ID, status: 'waiting_anteproyecto' });
+      academicRecordRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado', { action: 'approve' as any });
+
+      expect(result.status).toBe('approved');
+      expect(academicRecordRepo.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'waiting_documents' }));
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'academic.anteproyecto.approved',
+        expect.objectContaining({ applicationId: APP_ID }),
+        'application-service',
+      );
+    });
+
+    it('con 2 jurados, un solo voto approve deja el estado en under_review (no resuelve aún)', async () => {
+      const twoJurados = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a2', supervisorId: 's2', supervisorUserId: 'faculty-jurado-2', role: 'jurado_anteproyecto', status: 'accepted' },
+      ];
+      mockHttpClient.get
+        .mockResolvedValueOnce(twoJurados)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(twoJurados)
+        .mockResolvedValueOnce(twoJurados);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'revised', correctionCount: 2, juradoVotes: null,
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado', { action: 'approve' as any });
+
+      expect(result.status).toBe('under_review');
+      expect(result.juradoVotes).toEqual({ 'faculty-jurado': 'approve' });
+      expect(academicRecordRepo.save).not.toHaveBeenCalled();
+      expect(mockEventPublisher.publish).not.toHaveBeenCalledWith('academic.anteproyecto.approved', expect.anything(), expect.anything());
+    });
+
+    it('con 2 jurados, si uno rechaza tras que ambos voten, el resultado es rejected', async () => {
+      const twoJurados = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a2', supervisorId: 's2', supervisorUserId: 'faculty-jurado-2', role: 'jurado_anteproyecto', status: 'accepted' },
+      ];
+      mockHttpClient.get
+        .mockResolvedValueOnce(twoJurados)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(twoJurados)
+        .mockResolvedValueOnce(twoJurados);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'under_review', correctionCount: 2,
+        juradoVotes: { 'faculty-jurado': 'approve' },
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado-2', { action: 'reject' as any, comment: 'no cumple' });
+
+      expect(result.status).toBe('rejected');
+      expect(academicRecordRepo.save).not.toHaveBeenCalled();
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'academic.anteproyecto.rejected',
+        expect.objectContaining({ applicationId: APP_ID }),
+        'application-service',
+      );
+    });
+  });
+
+  describe('uploadDocument', () => {
+    it('crea un nuevo ProjectDocument cuando no existe entrega previa', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      mockHttpClient.get.mockResolvedValue({ id: 'req-1', name: 'Carta' });
+      documentRepo.findOne.mockResolvedValue(null);
+      documentRepo.create.mockImplementation((v: any) => v);
+      documentRepo.save.mockImplementation((v: any) => Promise.resolve({ id: 'doc-1', ...v }));
+
+      const result = await service.uploadDocument(APP_ID, STUDENT_ID, { requirementId: 'req-1', fileId: 'file-1' });
+
+      expect(result.status).toBe('submitted');
+      expect(result.fileId).toBe('file-1');
+    });
+
+    it('lanza NotFoundException si el requirement no existe', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      mockHttpClient.get.mockRejectedValue(new Error('404'));
+
+      await expect(
+        service.uploadDocument(APP_ID, STUDENT_ID, { requirementId: 'missing', fileId: 'file-1' }),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

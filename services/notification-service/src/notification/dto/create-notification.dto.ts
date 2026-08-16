@@ -4,6 +4,7 @@ import {
   IsString,
   IsOptional,
   IsObject,
+  IsBoolean,
 } from 'class-validator';
 import {
   NotificationType,
@@ -43,4 +44,10 @@ export class CreateNotificationDto {
   @IsOptional()
   @IsString()
   groupKey?: string;
+
+  /** Fuerza el envío por email aunque el usuario no tenga habilitada la categoría en sus preferencias.
+   *  Uso: eventos críticos institucionales (aprobación/rechazo de proyecto, plazos, acuerdos, finalización). */
+  @IsOptional()
+  @IsBoolean()
+  forceEmail?: boolean;
 }

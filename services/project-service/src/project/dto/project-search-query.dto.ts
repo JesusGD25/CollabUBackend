@@ -29,7 +29,7 @@ export class ProjectSearchQueryDto {
 
   @IsOptional()
   @IsString()
-  tag?: string;
+  skill?: string;
 
   @IsOptional()
   @IsString()

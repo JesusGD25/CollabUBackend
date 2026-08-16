@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -46,9 +46,28 @@ const MIME_VALIDATIONS: Record<string, { mimes: string[]; maxSize: number }> = {
     ],
     maxSize: 25 * 1024 * 1024,
   },
+  project_document: {
+    mimes: [
+      'application/pdf', 'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ],
+    maxSize: 10 * 1024 * 1024,
+  },
 };
 
 const BLOCKED_EXTENSIONS = ['.exe', '.bat', '.sh', '.cmd', '.com', '.msi', '.ps1'];
+
+/**
+ * Categorías cuyo control de acceso conoce otro servicio, y a cuál delegar.
+ * Para el resto, la propiedad del archivo sigue siendo la única vía.
+ */
+const CATEGORY_DELEGATE: Record<string, { service: string; path: string }> = {
+  [FileCategory.ACADEMIC_DOCUMENT]: { service: 'application', path: '/internal/applications/files/can-access' },
+  [FileCategory.DELIVERABLE]: { service: 'application', path: '/internal/applications/files/can-access' },
+  [FileCategory.INTERVIEW_ATTACHMENT]: { service: 'application', path: '/internal/applications/files/can-access' },
+  [FileCategory.REPORT]: { service: 'application', path: '/internal/applications/files/can-access' },
+  [FileCategory.PROJECT_DOCUMENT]: { service: 'project', path: '/internal/projects/files/can-access' },
+};
 
 const QUOTA_BY_ROLE: Record<string, number> = {
   student: 500 * 1024 * 1024,
@@ -67,6 +86,7 @@ export class StorageService {
     @InjectRepository(FileVersion) private versionRepo: Repository<FileVersion>,
     @InjectRepository(StorageQuota) private quotaRepo: Repository<StorageQuota>,
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {
     this.uploadDir = process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads');
     if (!fs.existsSync(this.uploadDir)) {
@@ -208,7 +228,7 @@ export class StorageService {
     };
   }
 
-  async getFileInfo(fileId: string, userId: string): Promise<StoredFile> {
+  async getFileInfo(fileId: string, userId: string, userRole: string | null = null): Promise<StoredFile> {
     const file = await this.fileRepo.findOne({
       where: { id: fileId },
       relations: ['versions'],
@@ -216,24 +236,82 @@ export class StorageService {
     if (!file || file.status === FileStatus.DELETED) {
       throw new NotFoundException('Archivo no encontrado');
     }
-    if (file.ownerId !== userId && !file.isPublic) {
+    // Mismo criterio que la descarga: quien puede leer el archivo puede leer sus
+    // metadatos. De lo contrario la interfaz no podría ni mostrar el nombre del
+    // documento que el usuario sí tiene derecho a abrir.
+    if (!(await this.canDownload(file, userId, userRole))) {
       throw new ForbiddenException('No tienes acceso a este archivo');
     }
     return file;
   }
 
-  async getFileForDownload(fileId: string, userId: string | null): Promise<{ file: StoredFile; filePath: string }> {
+  async getFileForDownload(
+    fileId: string,
+    userId: string | null,
+    userRole: string | null = null,
+  ): Promise<{ file: StoredFile; filePath: string }> {
     const file = await this.fileRepo.findOne({ where: { id: fileId } });
     if (!file || file.status === FileStatus.DELETED) {
       throw new NotFoundException('Archivo no encontrado');
     }
-    if (!file.isPublic && file.category !== FileCategory.CV && file.category !== FileCategory.PORTFOLIO && file.ownerId !== userId) {
+    if (!(await this.canDownload(file, userId, userRole))) {
       throw new ForbiddenException('No tienes acceso a este archivo');
     }
     if (!fs.existsSync(file.storagePath)) {
       throw new NotFoundException('Archivo físico no encontrado');
     }
     return { file, filePath: file.storagePath };
+  }
+
+  /**
+   * Decide si un usuario puede descargar un archivo.
+   *
+   * La propiedad no basta: el jurado debe leer el anteproyecto del estudiante, el
+   * asesor los entregables, y la Facultad los documentos que aprueba. Cuando el
+   * solicitante no es el propietario, se delega en el servicio dueño de la entidad,
+   * que es el único que conoce los roles del proyecto.
+   */
+  private async canDownload(
+    file: StoredFile,
+    userId: string | null,
+    userRole: string | null,
+  ): Promise<boolean> {
+    if (file.isPublic) return true;
+    if (file.category === FileCategory.CV || file.category === FileCategory.PORTFOLIO) return true;
+    if (userId && file.ownerId === userId) return true;
+    if (!userId) return false;
+
+    return this.delegateAccessCheck(file, userId, userRole);
+  }
+
+  /**
+   * Pregunta al Application Service si el usuario participa en el proyecto dueño
+   * del archivo y si su rol contextual permite leerlo.
+   *
+   * Ante cualquier fallo de red se deniega: es preferible un 403 recuperable a
+   * filtrar un documento académico.
+   */
+  private async delegateAccessCheck(
+    file: StoredFile,
+    userId: string,
+    userRole: string | null,
+  ): Promise<boolean> {
+    const target = CATEGORY_DELEGATE[file.category];
+    if (!target) return false;
+
+    try {
+      const result = await this.httpClient.post<{ allowed: boolean; reason?: string }>(
+        target.service,
+        target.path,
+        { fileId: file.id, userId, userRole },
+      );
+      return result?.allowed === true;
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo verificar el acceso al archivo ${file.id} para ${userId}: ${err.message}`,
+      );
+      return false;
+    }
   }
 
   async deleteFile(fileId: string, userId: string): Promise<void> {

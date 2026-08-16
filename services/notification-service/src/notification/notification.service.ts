@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import {
   Notification,
@@ -15,7 +15,9 @@ import {
 } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
 import { PushSubscription } from './entities/push-subscription.entity';
+import { EmailQueue, EmailStatus } from './entities/email-queue.entity';
 import { NotificationGateway } from './notification.gateway';
+import { MailerService } from './mailer.service';
 
 import {
   CreateNotificationDto,
@@ -43,16 +45,17 @@ export class NotificationService {
     private readonly preferencesRepo: Repository<NotificationPreferences>,
     @InjectRepository(PushSubscription)
     private readonly pushSubscriptionRepo: Repository<PushSubscription>,
+    @InjectRepository(EmailQueue)
+    private readonly emailQueueRepo: Repository<EmailQueue>,
     private readonly eventPublisher: EventPublisher,
     @Inject(forwardRef(() => NotificationGateway))
     private readonly notificationGateway: NotificationGateway,
+    private readonly mailerService: MailerService,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
-  private shouldSendWebSocketNotification(prefs: NotificationPreferences, type: NotificationType): boolean {
-    if (!prefs.inAppEnabled) {
-      return false;
-    }
-
+  /** Determina si la categoría del tipo de notificación está habilitada en preferencias, sin mirar el canal (in-app/email) */
+  private isTypeCategoryEnabled(prefs: NotificationPreferences, type: NotificationType): boolean {
     switch (type) {
       case NotificationType.APPLICATION_RECEIVED:
       case NotificationType.APPLICATION_STATUS_CHANGED:
@@ -76,6 +79,23 @@ export class NotificationService {
       case NotificationType.PROJECT_DEADLINE_REMINDER:
       case NotificationType.PROJECT_STATUS_CHANGED:
       case NotificationType.COMPANY_VERIFIED:
+      case NotificationType.PROJECT_SUBMITTED_FOR_REVIEW:
+      case NotificationType.PROJECT_APPROVED:
+      case NotificationType.PROJECT_REJECTED:
+      case NotificationType.PROJECT_NEEDS_CHANGES:
+      case NotificationType.SUPERVISOR_ASSIGNED:
+      case NotificationType.SUPERVISOR_ACCEPTED:
+      case NotificationType.SUPERVISOR_DECLINED:
+      case NotificationType.SUPERVISOR_REPLACED:
+      case NotificationType.ANTEPROYECTO_SUBMITTED:
+      case NotificationType.ANTEPROYECTO_CORRECTION_REQUESTED:
+      case NotificationType.ANTEPROYECTO_APPROVED:
+      case NotificationType.ANTEPROYECTO_REJECTED:
+      case NotificationType.AGREEMENT_UPLOADED:
+      case NotificationType.FINALIZATION_STARTED:
+      case NotificationType.PROGRESS_NEAR_COMPLETION:
+      case NotificationType.ACADEMIC_COMPLETED:
+      case NotificationType.DEADLINE_EXTENDED:
         return prefs.projectUpdates;
 
       case NotificationType.MESSAGE_RECEIVED:
@@ -87,6 +107,14 @@ export class NotificationService {
       default:
         return true; // Enviar por defecto si no es un tipo mapeado
     }
+  }
+
+  private shouldSendWebSocketNotification(prefs: NotificationPreferences, type: NotificationType): boolean {
+    return prefs.inAppEnabled && this.isTypeCategoryEnabled(prefs, type);
+  }
+
+  private shouldSendEmail(prefs: NotificationPreferences, type: NotificationType): boolean {
+    return prefs.emailEnabled && this.isTypeCategoryEnabled(prefs, type);
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -125,7 +153,59 @@ export class NotificationService {
     const unreadCount = await this.getUnreadCount(saved.userId);
     this.notificationGateway.sendUnreadCountToUser(saved.userId, unreadCount);
 
+    // Enviar por email si el usuario lo tiene habilitado para esta categoría (best-effort, no bloquea)
+    if (this.shouldSendEmail(prefs, saved.type) || dto.forceEmail) {
+      this.sendEmailForNotification(saved).catch((err) =>
+        this.logger.error(`Error en envío de email para notificación ${saved.id}: ${err.message}`, err.stack),
+      );
+    }
+
     return saved;
+  }
+
+  /** Resuelve el email del usuario (vía Auth Service) y envía la notificación por correo. Registra el intento en email_queue. */
+  private async sendEmailForNotification(notification: Notification): Promise<void> {
+    let toEmail: string | null = null;
+    try {
+      const user = await this.httpClient.get<{ email: string }>(
+        'auth',
+        `/internal/auth/users/${notification.userId}`,
+      );
+      toEmail = user?.email ?? null;
+    } catch (err: any) {
+      this.logger.warn(`No se pudo obtener email del usuario ${notification.userId}: ${err.message}`);
+    }
+
+    if (!toEmail) {
+      return;
+    }
+
+    const queueEntry = this.emailQueueRepo.create({
+      notificationId: notification.id,
+      toEmail,
+      subject: notification.title,
+      htmlContent: `<p>${notification.message}</p>`,
+      textContent: notification.message,
+      status: EmailStatus.SENDING,
+      attempts: 1,
+      lastAttemptAt: new Date(),
+    });
+    const saved = await this.emailQueueRepo.save(queueEntry);
+
+    const sent = await this.mailerService.send({
+      to: toEmail,
+      subject: notification.title,
+      html: `<p>${notification.message}</p>`,
+      text: notification.message,
+    });
+
+    saved.status = sent ? EmailStatus.SENT : EmailStatus.FAILED;
+    if (sent) {
+      saved.sentAt = new Date();
+    } else {
+      saved.errorMessage = 'Fallo al enviar vía SMTP';
+    }
+    await this.emailQueueRepo.save(saved);
   }
 
   async getUserNotifications(
@@ -311,6 +391,7 @@ export class NotificationService {
     title: string,
     message: string,
     data?: Record<string, any>,
+    forceEmail?: boolean,
   ): Promise<Notification> {
     return this.createNotification({
       userId,
@@ -318,6 +399,7 @@ export class NotificationService {
       title,
       message,
       data,
+      forceEmail,
     });
   }
 }

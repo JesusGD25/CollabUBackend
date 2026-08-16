@@ -50,6 +50,6 @@ import { ChatGateway } from './chat.gateway';
       inject: [HttpService],
     },
   ],
-  exports: [ChatService],
+  exports: [ChatService, MicroserviceHttpClient],
 })
 export class ChatModule {}

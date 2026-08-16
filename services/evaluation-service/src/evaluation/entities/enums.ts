@@ -10,6 +10,7 @@ export enum EvaluationType {
   COMPANY_EVALUATES_STUDENT = 'company_evaluates_student',
   STUDENT_EVALUATES_COMPANY = 'student_evaluates_company',
   SUPERVISOR_EVALUATES_STUDENT = 'supervisor_evaluates_student',
+  STUDENT_EVALUATES_SUPERVISOR = 'student_evaluates_supervisor',
   SELF_EVALUATION = 'self_evaluation',
 }
 

@@ -1,0 +1,22 @@
+-- Generado por generate-seed-files.mjs. No editar a mano.
+SET client_encoding = 'UTF8';
+\c storage_db;
+SET client_encoding = 'UTF8';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\tpl-anteproyecto-ing-sis.docx', file_size_bytes = 1404 WHERE id = 'ec11bb91-c6cd-46c4-b59a-505c4e097942';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\tpl-acta-inicio.docx', file_size_bytes = 1389 WHERE id = '22da06b2-44a6-42ab-ba56-c5fa2430261d';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\tpl-informe-final.docx', file_size_bytes = 1392 WHERE id = '66edebb0-bda5-44fc-9603-baa6937dd922';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\ia-app12.pdf', file_size_bytes = 681 WHERE id = '2cf8acf5-efb9-4874-a827-5af143491b48';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\ia-app13.pdf', file_size_bytes = 681 WHERE id = 'fbcfdf36-eadf-40c9-b56b-8c61cd1066a9';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\ia-app14.pdf', file_size_bytes = 681 WHERE id = 'e8b8ccc3-0f2c-4960-8baf-a8c19cec4370';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\ia-app15.pdf', file_size_bytes = 681 WHERE id = 'e8bdfe7a-495c-4132-897b-2cae9b0ceb9f';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\nota-final-app15.pdf', file_size_bytes = 670 WHERE id = '9595aafb-5ccc-4cdf-90b4-7f6a42b17303';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app08-v1.pdf', file_size_bytes = 670 WHERE id = 'bdc4e5b6-34fa-4681-82e7-903e7ddf1c8b';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app09-v1.pdf', file_size_bytes = 670 WHERE id = '6f0c8bb5-9170-4db9-ac89-37456ec124e4';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app10-v2.pdf', file_size_bytes = 670 WHERE id = '9f97ad63-3312-4d4d-84ca-f625d8b2fac7';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app11-v1.pdf', file_size_bytes = 670 WHERE id = '1894e72e-50cc-43d0-8280-cc2cd4c8c25a';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app12-v1.pdf', file_size_bytes = 670 WHERE id = '84f45fd9-c3d6-4253-ad5c-0b5c43c16fbc';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app13-v1.pdf', file_size_bytes = 670 WHERE id = '62cb6c7d-e3aa-4df1-89ba-62460b11b078';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app14-v1.pdf', file_size_bytes = 670 WHERE id = '51bdec3d-281f-4c5c-b6f4-89d7a94ddfdc';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app15-v1.pdf', file_size_bytes = 670 WHERE id = '0b000b69-d473-407b-81d5-e0510672b8f9';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\anteproyecto-app18-v1.pdf', file_size_bytes = 670 WHERE id = '816b13d9-e692-41ae-969b-ef9fa51e7c6f';
+UPDATE "files" SET storage_path = 'C:\Users\jesus\OneDrive\Escritorio\CollabU\Backend\services\storage-service\uploads\poliza-app11.pdf', file_size_bytes = 680 WHERE id = 'd06edc1c-0c4b-4fb4-ad1a-3adf99374f9f';

@@ -50,34 +50,33 @@ const mockEventPublisher = {
 };
 
 const makeStudentData = () => ({
-  id: 'student-uuid-1',
+  studentId: 'student-uuid-1',
   userId: 'user-uuid-1',
   program: 'Ingeniería de Sistemas',
-  faculty: 'Ingeniería',
   semester: 7,
   availability: 'remote',
   skills: [
-    { name: 'TypeScript', level: 4 },
-    { name: 'NestJS', level: 3 },
+    { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'expert' },
+    { name: 'NestJS', catalogSkillId: 'cat-nest', category: 'framework', proficiencyLevel: 'advanced' },
   ],
-  languages: [{ name: 'English', level: 'B2' }],
-  experiences: [{ years: 2 }],
+  languages: [{ language: 'English', proficiency: 'B2' }],
+  experiences: [{ type: 'internship', yearsEquivalent: 2 }],
 });
 
 const makeProjectData = () => ({
-  id: 'project-uuid-1',
+  projectId: 'project-uuid-1',
   title: 'Sistema de gestión universitaria',
-  academicProgram: 'Ingeniería de Sistemas',
-  faculty: 'Ingeniería',
+  academicPrograms: ['program-uuid-1'],
   minimumSemester: 6,
   locationType: 'remote',
-  requirements: [
-    { type: 'skill' as const, name: 'TypeScript', minimumLevel: 3, isRequired: true },
-    { type: 'skill' as const, name: 'NestJS', minimumLevel: 2, isRequired: true },
-    { type: 'language' as const, name: 'English', isRequired: false },
+  requirements: [{ type: 'language' as const, name: 'English', isMandatory: false }],
+  skills: [
+    { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'intermediate', isMandatory: true },
+    { name: 'NestJS', catalogSkillId: 'cat-nest', category: 'framework', proficiencyLevel: 'beginner', isMandatory: true },
   ],
-  desiredExperienceYears: 1,
 });
+
+const makePrograms = () => [{ id: 'program-uuid-1', name: 'Ingeniería de Sistemas' }];
 
 describe('MatchingService', () => {
   let service: MatchingService;
@@ -116,8 +115,9 @@ describe('MatchingService', () => {
       const projectData = makeProjectData();
 
       mockHttpClient.get
-        .mockResolvedValueOnce({ data: studentData })
-        .mockResolvedValueOnce({ data: projectData });
+        .mockResolvedValueOnce(studentData)
+        .mockResolvedValueOnce(projectData)
+        .mockResolvedValueOnce(makePrograms());
 
       weightRepo.find.mockResolvedValue([]);
       resultRepo.findOne.mockResolvedValue(null);
@@ -143,8 +143,9 @@ describe('MatchingService', () => {
       const projectData = makeProjectData();
 
       mockHttpClient.get
-        .mockResolvedValueOnce({ data: studentData })
-        .mockResolvedValueOnce({ data: projectData });
+        .mockResolvedValueOnce(studentData)
+        .mockResolvedValueOnce(projectData)
+        .mockResolvedValueOnce(makePrograms());
 
       weightRepo.find.mockResolvedValue([]);
       resultRepo.findOne.mockResolvedValue(null);
@@ -178,8 +179,9 @@ describe('MatchingService', () => {
       const projectData = makeProjectData();
 
       mockHttpClient.get
-        .mockResolvedValueOnce({ data: studentData })
-        .mockResolvedValueOnce({ data: projectData });
+        .mockResolvedValueOnce(studentData)
+        .mockResolvedValueOnce(projectData)
+        .mockResolvedValueOnce(makePrograms());
 
       weightRepo.find.mockResolvedValue([]);
 

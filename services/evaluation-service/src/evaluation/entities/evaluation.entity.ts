@@ -4,7 +4,6 @@ import {
   PrimaryGeneratedColumn,
   CreateDateColumn,
   UpdateDateColumn,
-  OneToMany,
 } from 'typeorm';
 import { EvaluationType, EvaluationStatus } from './enums';
 import { EvaluationRating } from './evaluation-rating.entity';
@@ -62,6 +61,20 @@ export class Evaluation {
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt: Date;
 
-  @OneToMany(() => EvaluationRating, (r) => r.evaluation)
-  ratings: EvaluationRating[];
+  /**
+   * No es una relación TypeORM (`@OneToMany`) — se llenaba a mano por
+   * `evaluation.service` tras una consulta separada a `EvaluationRating`.
+   * Antes era una relación real bidireccional, pero eso obligaba a que
+   * `EvaluationRating` tuviera un `@ManyToOne`/`@JoinColumn` sobre la misma
+   * columna física que ya tenía como `@Column` escalar (`evaluation_id`), y
+   * esa duplicación hacía que TypeORM insertara `evaluation_id = null` al
+   * crear un rating con `repo.create({ evaluationId })` sin poblar también
+   * la propiedad de relación.
+   */
+  ratings?: EvaluationRating[];
+
+  /** Enriquecidos a mano por `evaluation.service.enrichEvaluations` — no son columnas. */
+  projectTitle?: string | null;
+  evaluatorName?: string | null;
+  evaluatedName?: string | null;
 }

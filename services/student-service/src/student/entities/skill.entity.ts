@@ -12,10 +12,11 @@ import {
 import { StudentProfile } from './student-profile.entity';
 
 export enum SkillCategory {
-  TECHNICAL = 'technical',
-  SOFT = 'soft',
   LANGUAGE = 'language',
+  FRAMEWORK = 'framework',
   TOOL = 'tool',
+  CONCEPT = 'concept',
+  SOFT_SKILL = 'soft_skill',
 }
 
 export enum ProficiencyLevel {
@@ -37,6 +38,10 @@ export class Skill {
 
   @Column({ type: 'varchar', length: 100 })
   name: string;
+
+  /** Referencia al catálogo maestro de habilidades (admin-service). null = habilidad libre. */
+  @Column({ name: 'catalog_skill_id', type: 'uuid', nullable: true })
+  catalogSkillId: string | null;
 
   @Column({ type: 'enum', enum: SkillCategory })
   category: SkillCategory;

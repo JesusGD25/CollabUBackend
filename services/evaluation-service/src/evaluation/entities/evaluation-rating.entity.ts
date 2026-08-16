@@ -2,13 +2,18 @@ import {
   Entity,
   Column,
   PrimaryGeneratedColumn,
-  ManyToOne,
-  JoinColumn,
   CreateDateColumn,
 } from 'typeorm';
-import { Evaluation } from './evaluation.entity';
-import { EvaluationCriteria } from './evaluation-criteria.entity';
 
+/**
+ * Sin relaciones `@ManyToOne` a `evaluation_id`/`criterion_id`: tenerlas junto
+ * a las columnas escalares (mismo nombre de columna físico en ambas) hacía que
+ * TypeORM, al insertar vía `repo.create({ evaluationId, ... })` sin poblar la
+ * propiedad de relación `evaluation`, generara el INSERT priorizando el valor
+ * (vacío) de la relación sobre el escalar — `evaluation_id` llegaba `null` pese
+ * a asignarlo explícitamente. Nadie en el código leía `rating.evaluation` ni
+ * `rating.criterion`, así que se quitan y quedan solo las columnas UUID.
+ */
 @Entity('evaluation_ratings')
 export class EvaluationRating {
   @PrimaryGeneratedColumn('uuid')
@@ -28,12 +33,4 @@ export class EvaluationRating {
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
-
-  @ManyToOne(() => Evaluation, (e) => e.ratings, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'evaluation_id' })
-  evaluation: Evaluation;
-
-  @ManyToOne(() => EvaluationCriteria)
-  @JoinColumn({ name: 'criterion_id' })
-  criterion: EvaluationCriteria;
 }

@@ -27,6 +27,11 @@ export enum InterviewStatus {
   NO_SHOW = 'no_show',
 }
 
+export enum InterviewResolution {
+  PASSED = 'passed',
+  FAILED = 'failed',
+}
+
 export enum DeliverableStatus {
   PENDING = 'pending',
   SUBMITTED = 'submitted',
@@ -42,4 +47,10 @@ export enum DeliverableType {
   DOCUMENT = 'document',
   VIDEO = 'video',
   OTHER = 'other',
+}
+
+/** Quién solicitó el entregable — determina visibilidad (la empresa no ve los del asesor). */
+export enum RequesterType {
+  COMPANY = 'company',
+  ASESOR = 'asesor',
 }

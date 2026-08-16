@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { StudentService } from './student.service';
 import { StudentProfile, StudentAvailability, PreferredWorkMode } from './entities/student-profile.entity';
@@ -18,6 +18,14 @@ import { Interest } from './entities/interest.entity';
 
 const mockEventPublisher = {
   publish: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockHttpClient = {
+  get: jest.fn().mockResolvedValue({}),
+  post: jest.fn().mockResolvedValue([]),
+  patch: jest.fn().mockResolvedValue({}),
+  put: jest.fn().mockResolvedValue({}),
+  delete: jest.fn().mockResolvedValue({}),
 };
 
 const createMockRepo = () => ({
@@ -75,7 +83,7 @@ function createMockSkill(overrides: Partial<Skill> = {}): Skill {
     id: 'skill-uuid-1',
     studentId: 'student-uuid-1',
     name: 'TypeScript',
-    category: SkillCategory.TECHNICAL,
+    category: SkillCategory.LANGUAGE,
     proficiencyLevel: ProficiencyLevel.INTERMEDIATE,
     yearsOfExperience: null,
     isVerified: false,
@@ -112,6 +120,7 @@ describe('StudentService', () => {
         { provide: getRepositoryToken(Language), useFactory: createMockRepo },
         { provide: getRepositoryToken(Interest), useFactory: createMockRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
+        { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
     }).compile();
 
@@ -356,7 +365,7 @@ describe('StudentService', () => {
 
         const result = await service.addSkill('user-uuid-1', {
           name: 'TypeScript',
-          category: SkillCategory.TECHNICAL,
+          category: SkillCategory.LANGUAGE,
         });
 
         expect(result).toBeDefined();
@@ -418,8 +427,8 @@ describe('StudentService', () => {
         profileRepo.findOne.mockResolvedValue(createMockProfile({ skills }));
 
         const result = await service.addSkillsBatch('user-uuid-1', [
-          { name: 'TypeScript', category: SkillCategory.TECHNICAL },
-          { name: 'NestJS', category: SkillCategory.TECHNICAL },
+          { name: 'TypeScript', category: SkillCategory.LANGUAGE },
+          { name: 'NestJS', category: SkillCategory.LANGUAGE },
         ]);
 
         expect(result).toHaveLength(2);

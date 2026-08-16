@@ -148,7 +148,7 @@ describe('StudentController', () => {
     });
 
     it('debería agregar una habilidad', async () => {
-      const dto = { name: 'TypeScript', category: SkillCategory.TECHNICAL };
+      const dto = { name: 'TypeScript', category: SkillCategory.LANGUAGE };
       const expected = { id: '1', ...dto };
       service.addSkill.mockResolvedValue(expected);
 
@@ -158,8 +158,8 @@ describe('StudentController', () => {
 
     it('debería agregar habilidades en batch', async () => {
       const dtos = [
-        { name: 'TypeScript', category: SkillCategory.TECHNICAL },
-        { name: 'NestJS', category: SkillCategory.TECHNICAL },
+        { name: 'TypeScript', category: SkillCategory.LANGUAGE },
+        { name: 'NestJS', category: SkillCategory.LANGUAGE },
       ];
       service.addSkillsBatch.mockResolvedValue(dtos);
 

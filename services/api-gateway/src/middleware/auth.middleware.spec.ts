@@ -185,7 +185,7 @@ describe('GatewayAuthMiddleware', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           statusCode: 401,
-          message: 'Token de autenticación requerido',
+          message: 'Token de autenticacion requerido',
         }),
       );
       expect(next).not.toHaveBeenCalled();
@@ -270,7 +270,7 @@ describe('GatewayAuthMiddleware', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           statusCode: 401,
-          message: 'Token inválido o expirado',
+          message: 'Token invalido o expirado',
         }),
       );
       expect(next).not.toHaveBeenCalled();

@@ -77,6 +77,7 @@ describe('EvaluationService', () => {
   let mockRatingRepo: ReturnType<typeof createMockRepo>;
   let mockTemplateRepo: ReturnType<typeof createMockRepo>;
   let mockEventPublisher: { publish: jest.Mock };
+  let mockHttpClient: { get: jest.Mock; patch: jest.Mock };
 
   beforeEach(async () => {
     mockEvaluationRepo = createMockRepo();
@@ -84,7 +85,7 @@ describe('EvaluationService', () => {
     mockRatingRepo = createMockRepo();
     mockTemplateRepo = createMockRepo();
     mockEventPublisher = { publish: jest.fn().mockResolvedValue(undefined) };
-    const mockHttpClient = { get: jest.fn().mockResolvedValue(null), patch: jest.fn().mockResolvedValue(null) };
+    mockHttpClient = { get: jest.fn().mockResolvedValue({ status: 'completed' }), patch: jest.fn().mockResolvedValue(null) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -137,6 +138,25 @@ describe('EvaluationService', () => {
         expect.objectContaining({ evaluationId: EVAL_ID, evaluatedId: EVALUATED_ID }),
         'evaluation-service',
       );
+    });
+
+    it('debería lanzar BadRequestException si el proyecto académico no está completado', async () => {
+      mockEvaluationRepo.findOne.mockResolvedValue(null);
+      mockHttpClient.get.mockResolvedValueOnce({ status: 'active' });
+
+      await expect(service.createEvaluation(EVALUATOR_ID, dto)).rejects.toThrow(BadRequestException);
+    });
+
+    it('no bloquea self_evaluation aunque el proyecto no esté completado', async () => {
+      const saved = makeMockEvaluation();
+      mockEvaluationRepo.findOne.mockResolvedValue(null);
+      mockEvaluationRepo.create.mockReturnValue(saved);
+      mockEvaluationRepo.save.mockResolvedValue(saved);
+      mockHttpClient.get.mockResolvedValueOnce({ status: 'active' });
+
+      const result = await service.createEvaluation(EVALUATOR_ID, { ...dto, evaluationType: EvaluationType.SELF_EVALUATION });
+
+      expect(result).toBe(saved);
     });
 
     it('debería lanzar ConflictException si ya existe una evaluación del mismo tipo', async () => {

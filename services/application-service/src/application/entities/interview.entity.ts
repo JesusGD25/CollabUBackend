@@ -9,8 +9,8 @@ import {
   Index,
 } from 'typeorm';
 import { Application } from './application.entity';
-export { InterviewType, InterviewStatus } from './enums';
-import { InterviewType, InterviewStatus } from './enums';
+export { InterviewType, InterviewStatus, InterviewResolution } from './enums';
+import { InterviewType, InterviewStatus, InterviewResolution } from './enums';
 
 @Entity('interviews')
 @Index('idx_interviews_application', ['applicationId'])
@@ -61,6 +61,26 @@ export class Interview {
 
   @Column({ name: 'reminder_sent', default: false })
   reminderSent: boolean;
+
+  // ── Prueba técnica ──
+  @Column({ name: 'company_brief_file_id', type: 'uuid', nullable: true })
+  companyBriefFileId: string | null;
+
+  @Column({ name: 'technical_task_description', type: 'text', nullable: true })
+  technicalTaskDescription: string | null;
+
+  @Column({ name: 'technical_task_due_date', type: 'timestamptz', nullable: true })
+  technicalTaskDueDate: Date | null;
+
+  @Column({ name: 'student_solution_file_id', type: 'uuid', nullable: true })
+  studentSolutionFileId: string | null;
+
+  // ── Resolución de la empresa al finalizar ──
+  @Column({ name: 'company_resolution', type: 'enum', enum: InterviewResolution, nullable: true })
+  companyResolution: InterviewResolution | null;
+
+  @Column({ name: 'resolution_comment', type: 'text', nullable: true })
+  resolutionComment: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
