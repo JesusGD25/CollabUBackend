@@ -1,7 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  NotFoundException,
+  BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { MatchingService } from './matching.service';
 import { MatchWeight } from './entities/match-weight.entity';
 import { MatchResult } from './entities/match-result.entity';
@@ -49,7 +54,7 @@ const mockEventPublisher = {
   publish: jest.fn().mockResolvedValue(undefined),
 };
 
-const makeStudentData = () => ({
+const makeStudentData = (overrides: Record<string, unknown> = {}) => ({
   studentId: 'student-uuid-1',
   userId: 'user-uuid-1',
   program: 'Ingeniería de Sistemas',
@@ -61,9 +66,10 @@ const makeStudentData = () => ({
   ],
   languages: [{ language: 'English', proficiency: 'B2' }],
   experiences: [{ type: 'internship', yearsEquivalent: 2 }],
+  ...overrides,
 });
 
-const makeProjectData = () => ({
+const makeProjectData = (overrides: Record<string, unknown> = {}) => ({
   projectId: 'project-uuid-1',
   title: 'Sistema de gestión universitaria',
   academicPrograms: ['program-uuid-1'],
@@ -74,6 +80,7 @@ const makeProjectData = () => ({
     { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'intermediate', isMandatory: true },
     { name: 'NestJS', catalogSkillId: 'cat-nest', category: 'framework', proficiencyLevel: 'beginner', isMandatory: true },
   ],
+  ...overrides,
 });
 
 const makePrograms = () => [{ id: 'program-uuid-1', name: 'Ingeniería de Sistemas' }];
@@ -204,21 +211,214 @@ describe('MatchingService', () => {
       expect(resultRepo.save).toHaveBeenCalled();
     });
 
-    it('debería usar datos vacíos si el HTTP client falla', async () => {
-      mockHttpClient.get.mockRejectedValue(new Error('Network error'));
+    it('debería persistir los sub-scores en escala 0-100, no 0-1', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(makeStudentData())
+        .mockResolvedValueOnce(makeProjectData())
+        .mockResolvedValueOnce(makePrograms());
+
+      weightRepo.find.mockResolvedValue([]);
+      resultRepo.findOne.mockResolvedValue(null);
+      resultRepo.create.mockImplementation((data) => data as MatchResult);
+      resultRepo.save.mockImplementation((data) => Promise.resolve(data as MatchResult));
+      recommendationRepo.findOne.mockResolvedValue(null);
+      recommendationRepo.create.mockReturnValue({} as MatchRecommendation);
+      recommendationRepo.save.mockResolvedValue({} as MatchRecommendation);
+
+      const result = await service.calculateAndStore('student-uuid-1', 'project-uuid-1');
+
+      // Ambas skills matcheadas por catalogSkillId -> skillsScore 100 (no 1)
+      expect(result.skillsScore).toBe(100);
+      expect(result.programScore).toBe(100);
+      expect(result.semesterScore).toBe(100);
+      expect(result.availabilityScore).toBe(100);
+      // No debe existir experienceScore (factor eliminado)
+      expect((result as unknown as Record<string, unknown>).experienceScore).toBeUndefined();
+    });
+
+    it('debería lanzar ServiceUnavailableException si student-service falla (no usar datos vacíos)', async () => {
+      mockHttpClient.get.mockRejectedValueOnce(new Error('Network error'));
+      weightRepo.find.mockResolvedValue([]);
+
+      await expect(
+        service.calculateAndStore('student-uuid-1', 'project-uuid-1'),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(resultRepo.create).not.toHaveBeenCalled();
+      expect(resultRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('debería lanzar ServiceUnavailableException si project-service falla (no usar datos vacíos)', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(makeStudentData())
+        .mockRejectedValueOnce(new Error('Network error'));
+      weightRepo.find.mockResolvedValue([]);
+
+      await expect(
+        service.calculateAndStore('student-uuid-1', 'project-uuid-1'),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(resultRepo.create).not.toHaveBeenCalled();
+      expect(resultRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('debería lanzar ServiceUnavailableException si admin-service falla al resolver el programa por nombre (sin programId, no usar score neutral 0.5)', async () => {
+      // Estudiante sin programId (fallback por nombre) -> programMatchScore necesita admin-service.
+      mockHttpClient.get
+        .mockResolvedValueOnce(makeStudentData({ programId: null }))
+        .mockResolvedValueOnce(makeProjectData())
+        .mockRejectedValueOnce(new Error('admin-service unreachable'));
       weightRepo.find.mockResolvedValue([]);
       resultRepo.findOne.mockResolvedValue(null);
 
-      const mockResult = {
-        id: 'result-1',
-        overallScore: 0,
-        isRecommended: false,
-      } as MatchResult;
-      resultRepo.create.mockReturnValue(mockResult);
-      resultRepo.save.mockResolvedValue(mockResult);
+      await expect(
+        service.calculateAndStore('student-uuid-1', 'project-uuid-1'),
+      ).rejects.toThrow(ServiceUnavailableException);
+
+      expect(resultRepo.create).not.toHaveBeenCalled();
+      expect(resultRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  // ─── Casos de prueba matemáticos del algoritmo real ───────────────────────
+
+  describe('algoritmo de matching — casos controlados', () => {
+    const setup = async (studentOverrides = {}, projectOverrides = {}) => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(makeStudentData(studentOverrides))
+        .mockResolvedValueOnce(makeProjectData(projectOverrides))
+        .mockResolvedValueOnce(makePrograms());
+      weightRepo.find.mockResolvedValue([]);
+      resultRepo.findOne.mockResolvedValue(null);
+      resultRepo.create.mockImplementation((data) => data as MatchResult);
+      resultRepo.save.mockImplementation((data) => Promise.resolve(data as MatchResult));
+      recommendationRepo.findOne.mockResolvedValue(null);
+      recommendationRepo.create.mockReturnValue({} as MatchRecommendation);
+      recommendationRepo.save.mockResolvedValue({} as MatchRecommendation);
+      return service.calculateAndStore('student-uuid-1', 'project-uuid-1');
+    };
+
+    it('Caso A: match perfecto (skills+niveles+programa) produce score alto', async () => {
+      const result = await setup(
+        {
+          skills: [
+            { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'expert' },
+            { name: 'NestJS', catalogSkillId: 'cat-nest', category: 'framework', proficiencyLevel: 'advanced' },
+          ],
+        },
+        {},
+      );
+      expect(result.overallScore).toBeGreaterThanOrEqual(90);
+    });
+
+    it('Caso B: sin ninguna skill en común produce score significativamente menor', async () => {
+      const perfect = await setup();
+      mockHttpClient.get.mockReset();
+      const noMatch = await setup({
+        skills: [{ name: 'Rust', catalogSkillId: 'cat-rust', category: 'language', proficiencyLevel: 'expert' }],
+      });
+      expect(noMatch.overallScore).toBeLessThan(perfect.overallScore);
+      expect(noMatch.skillsScore).toBe(0);
+    });
+
+    it('Caso C: coincidencia parcial de skills queda entre match perfecto y sin coincidencias', async () => {
+      const partial = await setup({
+        skills: [
+          { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'expert' },
+        ],
+      });
+      // 1 de 2 skills obligatorias coincide -> skillsScore = 50
+      expect(partial.skillsScore).toBe(50);
+    });
+
+    it('Caso D: programa y skills incompatibles produce score bajo', async () => {
+      const result = await setup(
+        {
+          program: 'Ingeniería Civil',
+          skills: [{ name: 'AutoCAD', catalogSkillId: null, category: 'tool', proficiencyLevel: 'beginner' }],
+        },
+        {},
+      );
+      expect(result.overallScore).toBeLessThan(40);
+    });
+
+    it('nivel de skill insuficiente reduce proficiencyScore proporcionalmente', async () => {
+      const result = await setup({
+        skills: [
+          { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'beginner' },
+          { name: 'NestJS', catalogSkillId: 'cat-nest', category: 'framework', proficiencyLevel: 'beginner' },
+        ],
+      });
+      // requerido: TS=intermediate(rank2), NestJS=beginner(rank1); estudiante beginner(rank1) en ambos
+      // TS: 1/2=0.5, NestJS: 1/1=1.0 -> promedio 0.75 -> 75
+      expect(result.proficiencyScore).toBe(75);
+    });
+
+    it('normaliza nombres de skill sin catalogSkillId (fallback por nombre)', async () => {
+      const result = await setup({
+        skills: [
+          { name: ' TypeScript ', catalogSkillId: null, category: 'language', proficiencyLevel: 'expert' },
+          { name: 'nestjs', catalogSkillId: null, category: 'framework', proficiencyLevel: 'advanced' },
+        ],
+      });
+      expect(result.skillsScore).toBe(100);
+    });
+
+    it('proyecto sin skills es dato inconsistente (project-service exige >=1 para publicar) — score 0, no neutral 100', async () => {
+      const result = await setup({}, { skills: [] });
+      expect(result.skillsScore).toBe(0);
+      expect(result.proficiencyScore).toBe(0);
+    });
+
+    it('estudiante sin skills frente a proyecto con requisitos produce skillsScore 0', async () => {
+      const result = await setup({ skills: [] });
+      expect(result.skillsScore).toBe(0);
+    });
+
+    it('programMatchScore usa programId directo cuando está disponible (sin llamar a admin-service)', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(makeStudentData({ programId: 'program-uuid-1' }))
+        .mockResolvedValueOnce(makeProjectData());
+      // Solo 2 mockResolvedValueOnce porque programMatchScore con programId NO debe llamar a admin-service.
+      weightRepo.find.mockResolvedValue([]);
+      resultRepo.findOne.mockResolvedValue(null);
+      resultRepo.create.mockImplementation((data) => data as MatchResult);
+      resultRepo.save.mockImplementation((data) => Promise.resolve(data as MatchResult));
+      recommendationRepo.findOne.mockResolvedValue(null);
+      recommendationRepo.create.mockReturnValue({} as MatchRecommendation);
+      recommendationRepo.save.mockResolvedValue({} as MatchRecommendation);
 
       const result = await service.calculateAndStore('student-uuid-1', 'project-uuid-1');
-      expect(result).toBe(mockResult);
+      expect(result.programScore).toBe(100);
+      expect(mockHttpClient.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('programMatchScore con programId que no está en el proyecto da 0, sin ambigüedad de substring', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce(makeStudentData({ programId: 'program-uuid-OTRO' }))
+        .mockResolvedValueOnce(makeProjectData());
+      weightRepo.find.mockResolvedValue([]);
+      resultRepo.findOne.mockResolvedValue(null);
+      resultRepo.create.mockImplementation((data) => data as MatchResult);
+      resultRepo.save.mockImplementation((data) => Promise.resolve(data as MatchResult));
+      recommendationRepo.findOne.mockResolvedValue(null);
+      recommendationRepo.create.mockReturnValue({} as MatchRecommendation);
+      recommendationRepo.save.mockResolvedValue({} as MatchRecommendation);
+
+      const result = await service.calculateAndStore('student-uuid-1', 'project-uuid-1');
+      expect(result.programScore).toBe(0);
+    });
+
+    it('genera skillsBreakdown con matched/missing/extra', async () => {
+      const result = await setup({
+        skills: [
+          { name: 'TypeScript', catalogSkillId: 'cat-ts', category: 'language', proficiencyLevel: 'expert' },
+          { name: 'Docker', catalogSkillId: 'cat-docker', category: 'tool', proficiencyLevel: 'intermediate' },
+        ],
+      });
+      expect(result.skillsBreakdown?.matched.some((s) => s.name === 'TypeScript')).toBe(true);
+      expect(result.skillsBreakdown?.missing.some((s) => s.name === 'NestJS')).toBe(true);
+      expect(result.skillsBreakdown?.extra.some((s) => s.name === 'Docker')).toBe(true);
     });
   });
 
@@ -273,12 +473,11 @@ describe('MatchingService', () => {
 
   describe('updateWeights', () => {
     const validWeights = [
-      { factorName: MatchFactor.SKILLS_MATCH, weight: 0.35 },
+      { factorName: MatchFactor.SKILLS_MATCH, weight: 0.45 },
       { factorName: MatchFactor.PROFICIENCY_MATCH, weight: 0.15 },
       { factorName: MatchFactor.PROGRAM_MATCH, weight: 0.15 },
       { factorName: MatchFactor.SEMESTER_MATCH, weight: 0.10 },
       { factorName: MatchFactor.AVAILABILITY_MATCH, weight: 0.10 },
-      { factorName: MatchFactor.EXPERIENCE_MATCH, weight: 0.10 },
       { factorName: MatchFactor.LANGUAGE_MATCH, weight: 0.05 },
     ];
 
@@ -288,7 +487,7 @@ describe('MatchingService', () => {
       weightRepo.save.mockImplementation((data) => Promise.resolve(data as MatchWeight));
 
       const result = await service.updateWeights({ weights: validWeights });
-      expect(result).toHaveLength(7);
+      expect(result).toHaveLength(6);
     });
 
     it('debería lanzar BadRequestException si los pesos no suman 1.0', async () => {
@@ -353,16 +552,17 @@ describe('MatchingService', () => {
   // ─── batchCalculate ───────────────────────────────────────────────────────
 
   describe('batchCalculate', () => {
-    it('debería procesar todos los studentIds en lotes', async () => {
+    it('debería contar como fallidos los cálculos cuyo servicio dependiente no responde (no inventa scores)', async () => {
       const studentIds = ['s1', 's2', 's3'];
       mockHttpClient.get.mockRejectedValue(new Error('No service'));
       weightRepo.find.mockResolvedValue([]);
       resultRepo.findOne.mockResolvedValue(null);
-      resultRepo.create.mockReturnValue({ id: 'r', overallScore: 0, isRecommended: false } as MatchResult);
-      resultRepo.save.mockResolvedValue({ id: 'r', overallScore: 0, isRecommended: false } as MatchResult);
 
       const result = await service.batchCalculate({ projectId: 'p1', studentIds });
-      expect(result.processed + result.failed).toBe(3);
+      expect(result.processed).toBe(0);
+      expect(result.failed).toBe(3);
+      expect(resultRepo.create).not.toHaveBeenCalled();
+      expect(resultRepo.save).not.toHaveBeenCalled();
     });
 
     it('debería retornar 0 procesados si no hay studentIds', async () => {

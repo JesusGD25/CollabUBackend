@@ -1,67 +1,95 @@
 -- =========================================================================
 -- COLLAB-U — ROLLBACK DEL SEED COMPLETO
--- Elimina únicamente las filas creadas por seed_full_up.sql (por prefijo de
--- UUID determinístico), en orden inverso para respetar dependencias lógicas.
--- Las columnas "id" son de tipo uuid, por eso se castean a ::text para LIKE.
+--
+-- Reescrito (ver PLANNING_RECONSTRUCCION_SEED.md): la versión anterior
+-- borraba por prefijo de UUID determinístico, pero el seed real nunca usó
+-- esos prefijos — el rollback no borraba prácticamente nada. Esta versión
+-- usa TRUNCATE ... CASCADE sobre exactamente las tablas que seed_full_up.sql
+-- puebla, base de datos por base de datos (cada microservicio tiene su
+-- propia base — no hay FKs reales entre bases, así que no hace falta un
+-- orden global; CASCADE resuelve las FKs internas de cada base).
+--
+-- No trunca tablas de catálogos dinámicos (skill_catalog, academic_programs,
+-- skill_program_mapping) — esas las siembra admin-service en runtime
+-- (onModuleInit) y no dependen de este script.
 -- =========================================================================
-
-\c notification_db;
-SET client_encoding = 'UTF8';
-DELETE FROM "notifications" WHERE id::text LIKE 'a1000000-%';
 
 \c chat_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "messages" WHERE id::text LIKE '94000000-%';
-DELETE FROM "conversation_participants" WHERE id::text LIKE '93000000-%';
-DELETE FROM "conversations" WHERE id::text LIKE '92000000-%';
+TRUNCATE TABLE "messages", "conversation_participants", "conversations" RESTART IDENTITY CASCADE;
+
+\c notification_db;
+SET client_encoding = 'UTF8';
+TRUNCATE TABLE "notifications" RESTART IDENTITY CASCADE;
 
 \c storage_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "files" WHERE id::text LIKE '80000000-%';
+TRUNCATE TABLE "files" RESTART IDENTITY CASCADE;
 
 \c evaluation_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "evaluations" WHERE id::text LIKE '91000000-%';
+TRUNCATE TABLE "evaluations" RESTART IDENTITY CASCADE;
 
 \c application_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "deliverable_comments" WHERE id::text LIKE '75000000-%';
-DELETE FROM "student_deliverables" WHERE id::text LIKE '74000000-%';
-DELETE FROM "project_documents" WHERE id::text LIKE '73000000-%';
-DELETE FROM "submission_history" WHERE id::text LIKE '71000000-%';
-DELETE FROM "academic_submissions" WHERE id::text LIKE '70000000-%';
-DELETE FROM "project_academic_records" WHERE id::text LIKE '72000000-%';
-DELETE FROM "interviews" WHERE id::text LIKE '61000000-%';
-DELETE FROM "application_timeline" WHERE id::text LIKE '62000000-%';
-DELETE FROM "applications" WHERE id::text LIKE '60000000-%';
+TRUNCATE TABLE
+  "deliverable_attachments",
+  "deliverable_comments",
+  "student_deliverables",
+  "final_document_requirements",
+  "selection_document_requests",
+  "project_document_requirements",
+  "project_documents",
+  "submission_history",
+  "academic_submissions",
+  "project_academic_records",
+  "interviews",
+  "application_timeline",
+  "applications"
+RESTART IDENTITY CASCADE;
 
 \c admin_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "project_rejection_categories" WHERE id::text LIKE '46000000-%';
-DELETE FROM "document_requirements" WHERE id::text LIKE '44000000-%';
-DELETE FROM "academic_templates" WHERE id::text LIKE '45000000-%';
-DELETE FROM "supervisor_assignment_history" WHERE id::text LIKE '43100000-%';
-DELETE FROM "supervisor_assignments" WHERE id::text LIKE '43000000-%';
-DELETE FROM "supervisors" WHERE id::text LIKE '42000000-%';
-DELETE FROM "academic_periods" WHERE id::text LIKE '90000000-%';
+TRUNCATE TABLE
+  "company_verifications",
+  "document_requirements",
+  "academic_templates",
+  "supervisor_assignment_history",
+  "supervisor_assignments",
+  "supervisors",
+  "academic_periods"
+RESTART IDENTITY CASCADE;
 
 \c project_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "project_deliverables" WHERE id::text LIKE '51000000-%';
-DELETE FROM "projects" WHERE id::text LIKE '50000000-%';
+TRUNCATE TABLE
+  "project_requirements",
+  "project_skills",
+  "project_deliverables",
+  "projects"
+RESTART IDENTITY CASCADE;
 
 \c company_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "companies" WHERE id::text LIKE '22000000-%';
+TRUNCATE TABLE
+  "business_areas",
+  "company_contacts",
+  "company_locations",
+  "companies"
+RESTART IDENTITY CASCADE;
 
 \c student_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "student_profiles" WHERE id::text LIKE '12000000-%';
+TRUNCATE TABLE "languages", "skills", "student_profiles" RESTART IDENTITY CASCADE;
 
 \c user_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "user_profiles" WHERE id::text LIKE '11000000-%' OR id::text LIKE '21000000-%' OR id::text LIKE '31000000-%' OR id::text LIKE '41000000-%';
+TRUNCATE TABLE "user_settings", "user_profiles" RESTART IDENTITY CASCADE;
 
 \c auth_db;
 SET client_encoding = 'UTF8';
-DELETE FROM "users" WHERE id::text LIKE '10000000-%' OR id::text LIKE '20000000-%' OR id::text LIKE '30000000-%' OR id::text LIKE '40000000-%';
+TRUNCATE TABLE "users" RESTART IDENTITY CASCADE;
+
+-- =========================================================================
+-- FIN DEL ROLLBACK
+-- =========================================================================

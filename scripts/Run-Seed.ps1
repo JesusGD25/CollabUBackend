@@ -132,6 +132,30 @@ if (-Not $Rollback) {
         Write-Host "No se pudieron actualizar las rutas de los archivos." -ForegroundColor Red
         exit $pathsExit
     }
+
+    # -- Resolucion contra catalogos reales (admin-service) ------------------
+    # skill_catalog y academic_programs se generan en runtime (admin-service
+    # onModuleInit) con UUIDs no deterministas, asi que el seed SQL siembra
+    # catalog_skill_id=NULL y academic_programs como texto -- estos dos scripts
+    # los resuelven contra el catalogo real ya arrancado. Sin este paso, los
+    # proyectos de los escenarios de matching (FASE 6) quedan con
+    # academic_programs en texto plano, lo que hace que matching-service falle
+    # con 503 al intentar resolver el programa contra admin-service.
+    Write-Host "Resolviendo catalogSkillId y academic_programs contra los catalogos reales..." -ForegroundColor Green
+    node (Join-Path $ScriptDir "migrate-skills-unification.mjs")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "No se pudo resolver el catalogo de skills/programas. Verifica que admin-service, student-service y project-service esten corriendo, y vuelve a correr:" -ForegroundColor Red
+        Write-Host "  node scripts/migrate-skills-unification.mjs" -ForegroundColor DarkGray
+        Write-Host "  node scripts/migrate-student-program.mjs" -ForegroundColor DarkGray
+        exit $LASTEXITCODE
+    }
+
+    node (Join-Path $ScriptDir "migrate-student-program.mjs")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "No se pudo resolver el programId de los estudiantes. Vuelve a correr:" -ForegroundColor Red
+        Write-Host "  node scripts/migrate-student-program.mjs" -ForegroundColor DarkGray
+        exit $LASTEXITCODE
+    }
 }
 
 Write-Host "Operacion completada con exito." -ForegroundColor Cyan

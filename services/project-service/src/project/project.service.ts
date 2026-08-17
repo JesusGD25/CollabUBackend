@@ -665,7 +665,10 @@ export class ProjectService {
     if (!project) {
       return { allowed: false, reason: 'file_not_linked_to_project' };
     }
-    if (userRole === 'admin' || userRole === 'faculty') {
+    // El documento formal de solicitud es parte del aviso del proyecto: cualquier
+    // rol autenticado de la plataforma (estudiante evaluando postular, empresa,
+    // docente, admin) debe poder verlo y descargarlo, no solo admin/faculty.
+    if (userRole === 'admin' || userRole === 'faculty' || userRole === 'student' || userRole === 'company') {
       return { allowed: true };
     }
     return { allowed: false, reason: 'role_not_authorized' };

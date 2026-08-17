@@ -4,7 +4,6 @@ export enum MatchFactor {
   PROGRAM_MATCH = 'program_match',
   SEMESTER_MATCH = 'semester_match',
   AVAILABILITY_MATCH = 'availability_match',
-  EXPERIENCE_MATCH = 'experience_match',
   LANGUAGE_MATCH = 'language_match',
 }
 

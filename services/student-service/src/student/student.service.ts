@@ -52,15 +52,35 @@ export class StudentService {
 
   // ── PERFIL ──
 
+  /** Resuelve el nombre de programa contra admin-service.academic_programs (best-effort, no bloqueante). */
+  private async resolveProgramId(programName: string): Promise<string | null> {
+    if (!programName?.trim()) return null;
+    try {
+      const programs = await this.httpClient.get<{ id: string; name: string }[]>(
+        'admin',
+        '/internal/admin/programs',
+      );
+      const norm = programName.toLowerCase().trim();
+      const match = programs.find((p) => p.name.toLowerCase().trim() === norm);
+      return match?.id ?? null;
+    } catch (err) {
+      this.logger.warn(`No se pudo resolver programId contra el catálogo: ${err.message}`);
+      return null;
+    }
+  }
+
   async createProfile(dto: CreateStudentProfileDto): Promise<StudentProfile> {
     const existing = await this.profileRepo.findOne({ where: { userId: dto.userId } });
     if (existing) {
       throw new ConflictException('Ya existe un perfil de estudiante para este usuario');
     }
 
+    const programId = dto.programId ?? (await this.resolveProgramId(dto.program));
+
     const profile = this.profileRepo.create({
       userId: dto.userId,
       program: dto.program,
+      programId,
       faculty: dto.faculty || 'Facultad de Ingeniería',
       semester: dto.semester,
       studentCode: dto.studentCode,
@@ -120,7 +140,21 @@ export class StudentService {
 
   async updateProfile(userId: string, dto: UpdateStudentProfileDto): Promise<StudentProfile> {
     const profile = await this.getProfile(userId);
-    Object.assign(profile, dto);
+    if (dto.program !== undefined && dto.programId === undefined) {
+      // El texto de programa cambió sin programId explícito: re-resuelve contra el catálogo.
+      // Si no matchea nada, se limpia el programId anterior en vez de dejar un ID obsoleto
+      // apuntando a un programa que ya no coincide con el texto.
+      profile.programId = await this.resolveProgramId(dto.program);
+    }
+    // NestJS/class-transformer con `target >= ES2022` (useDefineForClassFields) inicializa
+    // TODOS los campos declarados del DTO como propiedad propia `undefined` aunque el cliente
+    // no los haya enviado — Object.assign(profile, dto) directo los copiaría igual, y TypeORM
+    // persiste `undefined` como SQL NULL, borrando silenciosamente cualquier campo no incluido
+    // en el PATCH. Se filtran explícitamente antes de aplicar.
+    const definedFields = Object.fromEntries(
+      Object.entries(dto).filter(([, value]) => value !== undefined),
+    );
+    Object.assign(profile, definedFields);
 
     const saved = await this.profileRepo.save(profile);
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
@@ -479,6 +513,7 @@ export class StudentService {
       studentId: profile.id,
       userId: profile.userId,
       program: profile.program,
+      programId: profile.programId,
       semester: profile.semester,
       availability: profile.availability,
       skills: (profile.skills || []).map((s) => ({

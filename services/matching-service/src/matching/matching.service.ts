@@ -4,12 +4,13 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { MicroserviceHttpClient, EventPublisher } from '@collab-u/shared';
 import { MatchWeight } from './entities/match-weight.entity';
-import { MatchResult } from './entities/match-result.entity';
+import { MatchResult, SkillsBreakdown } from './entities/match-result.entity';
 import { MatchRecommendation } from './entities/match-recommendation.entity';
 import { MatchFeedback } from './entities/match-feedback.entity';
 import {
@@ -53,6 +54,7 @@ interface StudentData {
   studentId: string;
   userId: string;
   program: string;
+  programId?: string | null;
   semester: number;
   availability?: string; // 'full_time' | 'part_time' | 'flexible'
   skills: StudentSkill[];
@@ -92,6 +94,10 @@ const PROFICIENCY_RANK: Record<ProficiencyLevel, number> = {
   expert: 4,
 };
 
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
 function normalizeSkillName(name: string): string {
   return name
     .toLowerCase()
@@ -101,13 +107,15 @@ function normalizeSkillName(name: string): string {
     .replace(/\.ts$/i, '');
 }
 
+/** Umbral desde el cual un match genera recomendación (decisión de negocio, ver /matching en frontend). */
+const RECOMMENDED_THRESHOLD = 50;
+
 const DEFAULT_WEIGHTS: Record<MatchFactor, number> = {
-  [MatchFactor.SKILLS_MATCH]: 0.35,
+  [MatchFactor.SKILLS_MATCH]: 0.45,
   [MatchFactor.PROFICIENCY_MATCH]: 0.15,
   [MatchFactor.PROGRAM_MATCH]: 0.15,
   [MatchFactor.SEMESTER_MATCH]: 0.1,
   [MatchFactor.AVAILABILITY_MATCH]: 0.1,
-  [MatchFactor.EXPERIENCE_MATCH]: 0.1,
   [MatchFactor.LANGUAGE_MATCH]: 0.05,
 };
 
@@ -152,6 +160,15 @@ export class MatchingService {
     const overallScore = this.computeOverallScore(factorScores, weights);
     const compatibilityLevel = this.getCompatibilityLevel(overallScore);
     const weightsSnapshot = this.buildWeightsSnapshot(weights);
+    const skillsBreakdown = this.buildSkillsBreakdown(student.skills, project.skills);
+
+    // Los factores se calculan en escala 0-1; se persisten en 0-100, igual que overallScore.
+    const skillsScore = round2(factorScores[MatchFactor.SKILLS_MATCH] * 100);
+    const proficiencyScore = round2(factorScores[MatchFactor.PROFICIENCY_MATCH] * 100);
+    const programScore = round2(factorScores[MatchFactor.PROGRAM_MATCH] * 100);
+    const semesterScore = round2(factorScores[MatchFactor.SEMESTER_MATCH] * 100);
+    const availabilityScore = round2(factorScores[MatchFactor.AVAILABILITY_MATCH] * 100);
+    const languageScore = round2(factorScores[MatchFactor.LANGUAGE_MATCH] * 100);
 
     const existing = await this.resultRepo.findOne({
       where: { studentId, projectId },
@@ -162,16 +179,16 @@ export class MatchingService {
 
     if (existing) {
       existing.overallScore = overallScore;
-      existing.skillsScore = factorScores[MatchFactor.SKILLS_MATCH];
-      existing.proficiencyScore = factorScores[MatchFactor.PROFICIENCY_MATCH];
-      existing.programScore = factorScores[MatchFactor.PROGRAM_MATCH];
-      existing.semesterScore = factorScores[MatchFactor.SEMESTER_MATCH];
-      existing.availabilityScore = factorScores[MatchFactor.AVAILABILITY_MATCH];
-      existing.experienceScore = factorScores[MatchFactor.EXPERIENCE_MATCH];
-      existing.languageScore = factorScores[MatchFactor.LANGUAGE_MATCH];
+      existing.skillsScore = skillsScore;
+      existing.proficiencyScore = proficiencyScore;
+      existing.programScore = programScore;
+      existing.semesterScore = semesterScore;
+      existing.availabilityScore = availabilityScore;
+      existing.languageScore = languageScore;
+      existing.skillsBreakdown = skillsBreakdown;
       existing.weightsSnapshot = weightsSnapshot;
       existing.compatibilityLevel = compatibilityLevel;
-      existing.isRecommended = overallScore >= 70;
+      existing.isRecommended = overallScore >= RECOMMENDED_THRESHOLD;
       existing.calculatedAt = new Date();
       existing.expiresAt = expiresAt;
       const saved = await this.resultRepo.save(existing);
@@ -183,16 +200,16 @@ export class MatchingService {
       studentId,
       projectId,
       overallScore,
-      skillsScore: factorScores[MatchFactor.SKILLS_MATCH],
-      proficiencyScore: factorScores[MatchFactor.PROFICIENCY_MATCH],
-      programScore: factorScores[MatchFactor.PROGRAM_MATCH],
-      semesterScore: factorScores[MatchFactor.SEMESTER_MATCH],
-      availabilityScore: factorScores[MatchFactor.AVAILABILITY_MATCH],
-      experienceScore: factorScores[MatchFactor.EXPERIENCE_MATCH],
-      languageScore: factorScores[MatchFactor.LANGUAGE_MATCH],
+      skillsScore,
+      proficiencyScore,
+      programScore,
+      semesterScore,
+      availabilityScore,
+      languageScore,
+      skillsBreakdown,
       weightsSnapshot,
       compatibilityLevel,
-      isRecommended: overallScore >= 70,
+      isRecommended: overallScore >= RECOMMENDED_THRESHOLD,
       expiresAt,
     });
 
@@ -351,7 +368,12 @@ export class MatchingService {
     userId: string,
     targetType: TargetType,
     query: RecommendationQueryDto,
-  ): Promise<{ data: MatchRecommendation[]; total: number }> {
+  ): Promise<{
+    data: (MatchRecommendation & { projectTitle: string | null })[];
+    total: number;
+    page: number;
+    limit: number;
+  }> {
     const qb = this.recommendationRepo
       .createQueryBuilder('rec')
       .leftJoinAndSelect('rec.matchResult', 'mr')
@@ -363,13 +385,44 @@ export class MatchingService {
       qb.andWhere('rec.isSeen = false');
     }
 
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 20;
+
     const [data, total] = await qb
       .orderBy('rec.createdAt', 'DESC')
-      .skip(((query.page ?? 1) - 1) * (query.limit ?? 20))
-      .take(query.limit ?? 20)
+      .skip((page - 1) * limit)
+      .take(limit)
       .getManyAndCount();
 
-    return { data, total };
+    const enriched = await this.enrichWithProjectTitles(data);
+    return { data: enriched, total, page, limit };
+  }
+
+  /** Adjunta el título del proyecto a cada recomendación — matching-service no lo tiene, project-service sí. */
+  private async enrichWithProjectTitles(
+    recommendations: MatchRecommendation[],
+  ): Promise<(MatchRecommendation & { projectTitle: string | null })[]> {
+    const projectIds = [...new Set(recommendations.map((r) => r.matchResult?.projectId).filter(Boolean))];
+    if (projectIds.length === 0) {
+      return recommendations.map((r) => ({ ...r, projectTitle: null }));
+    }
+
+    let titleById = new Map<string, string>();
+    try {
+      const projects = await this.httpClient.post<{ id: string; title: string }[]>(
+        'project',
+        '/internal/projects/batch-basic',
+        { projectIds },
+      );
+      titleById = new Map(projects.map((p) => [p.id, p.title]));
+    } catch (err) {
+      this.logger.warn(`No se pudo enriquecer recomendaciones con títulos de proyecto: ${(err as Error).message}`);
+    }
+
+    return recommendations.map((r) => ({
+      ...r,
+      projectTitle: r.matchResult ? (titleById.get(r.matchResult.projectId) ?? null) : null,
+    }));
   }
 
   async markRecommendationSeen(
@@ -448,6 +501,7 @@ export class MatchingService {
       ),
       [MatchFactor.PROGRAM_MATCH]: await this.programMatchScore(
         student.program,
+        student.programId ?? null,
         project.academicPrograms,
       ),
       [MatchFactor.SEMESTER_MATCH]:
@@ -456,7 +510,6 @@ export class MatchingService {
         student.availability,
         project.locationType,
       ),
-      [MatchFactor.EXPERIENCE_MATCH]: this.experienceScore(),
       [MatchFactor.LANGUAGE_MATCH]: this.languageMatchScore(
         student.languages,
         langReqs,
@@ -485,11 +538,23 @@ export class MatchingService {
     return normalizeSkillName(studentSkill.name) === normalizeSkillName(projectSkill.name);
   }
 
+  /**
+   * project-service exige >=1 skill antes de aceptar un proyecto a revisión (`pending_approval`)
+   * y solo admin puede pasarlo a `published` — un proyecto publicado real SIEMPRE tiene skills.
+   * `projectSkills.length === 0` aquí solo puede darse con datos legacy/corruptos (draft viejo,
+   * seed inconsistente): no es "sin requisitos" legítimo, así que NO se premia con 1.0 — se
+   * trata como ausencia de datos y se puntúa 0, documentado explícitamente vía warning.
+   */
   private skillsMatchScore(
     studentSkills: StudentSkill[],
     projectSkills: ProjectSkill[],
   ): number {
-    if (projectSkills.length === 0) return 1.0;
+    if (projectSkills.length === 0) {
+      this.logger.warn(
+        'skillsMatchScore: proyecto sin skills — dato inconsistente (project-service exige >=1 skill para publicar). Score 0, no neutral.',
+      );
+      return 0;
+    }
     const mandatory = projectSkills.filter((s) => s.isMandatory);
     const target = mandatory.length > 0 ? mandatory : projectSkills;
     const matched = target.filter((ps) =>
@@ -502,7 +567,8 @@ export class MatchingService {
     studentSkills: StudentSkill[],
     projectSkills: ProjectSkill[],
   ): number {
-    if (projectSkills.length === 0) return 1.0;
+    // Mismo razonamiento que skillsMatchScore: proyecto sin skills es dato inconsistente, no "sin requisito".
+    if (projectSkills.length === 0) return 0;
     const withLevel = projectSkills.filter((s) => s.proficiencyLevel);
     if (withLevel.length === 0) return 1.0;
 
@@ -520,11 +586,22 @@ export class MatchingService {
 
   private async programMatchScore(
     studentProgram: string,
+    studentProgramId: string | null,
     projectProgramIds: string[] | undefined,
   ): Promise<number> {
     if (!projectProgramIds || projectProgramIds.length === 0) return 1.0;
+
+    // Comparación directa por UUID cuando el estudiante ya tiene programId resuelto —
+    // determinística, sin ambigüedad de substring. Fuente de verdad preferida.
+    if (studentProgramId) {
+      return projectProgramIds.includes(studentProgramId) ? 1.0 : 0.0;
+    }
+
     if (!studentProgram) return 0.0;
 
+    // Mismo criterio que fetchStudentData/fetchProjectData (decisión de negocio FASE 1): un fallo de
+    // red hacia un servicio dependiente NUNCA se traduce en un score inventado (ni neutral ni alto/bajo).
+    // admin-service es dependencia real de este cálculo cuando se necesita resolver programa por nombre.
     let programNames: string[] = [];
     try {
       programNames = (
@@ -534,8 +611,10 @@ export class MatchingService {
         )
       ).map((p) => p.name);
     } catch (err) {
-      this.logger.warn(`No se pudo resolver programas académicos del proyecto: ${(err as Error).message}`);
-      return 0.5; // no se pudo verificar — score neutral en vez de penalizar por un fallo transitorio
+      this.logger.error(`No se pudo resolver programas académicos del proyecto: ${(err as Error).message}`);
+      throw new ServiceUnavailableException(
+        'admin-service no disponible: no se puede calcular matching sin resolver el programa académico del proyecto',
+      );
     }
 
     const normStudentProgram = studentProgram.toLowerCase().trim();
@@ -565,9 +644,40 @@ export class MatchingService {
     return 0.3;
   }
 
-  /** El proyecto no tiene un campo de años de experiencia deseados — factor neutral hasta que exista esa data. */
-  private experienceScore(): number {
-    return 1.0;
+  /** Desglose explicable de skills: coincidentes (con nivel estudiante/requerido), faltantes y extra del estudiante. */
+  private buildSkillsBreakdown(
+    studentSkills: StudentSkill[],
+    projectSkills: ProjectSkill[],
+  ): SkillsBreakdown {
+    const matched: SkillsBreakdown['matched'] = [];
+    const missing: SkillsBreakdown['missing'] = [];
+
+    for (const ps of projectSkills) {
+      const studentSkill = studentSkills.find((ss) => this.skillMatches(ss, ps));
+      const entry = {
+        name: ps.name,
+        catalogSkillId: ps.catalogSkillId,
+        requiredLevel: ps.proficiencyLevel,
+        studentLevel: studentSkill?.proficiencyLevel ?? null,
+      };
+      if (studentSkill) matched.push(entry);
+      else missing.push(entry);
+    }
+
+    const matchedStudentNames = new Set(
+      projectSkills
+        .filter((ps) => studentSkills.some((ss) => this.skillMatches(ss, ps)))
+        .flatMap((ps) => studentSkills.filter((ss) => this.skillMatches(ss, ps)).map((ss) => normalizeSkillName(ss.name))),
+    );
+    const extra = studentSkills
+      .filter((ss) => !matchedStudentNames.has(normalizeSkillName(ss.name)))
+      .map((ss) => ({
+        name: ss.name,
+        catalogSkillId: ss.catalogSkillId,
+        studentLevel: ss.proficiencyLevel,
+      }));
+
+    return { matched, missing, extra };
   }
 
   private languageMatchScore(
@@ -644,25 +754,24 @@ export class MatchingService {
     }
   }
 
+  /**
+   * Un fallo de red al obtener datos reales NUNCA debe traducirse en un score inventado
+   * (ni alto ni bajo) — se relanza como error explícito para que el caller lo maneje
+   * como falla de dependencia, no como resultado de negocio.
+   */
   private async fetchStudentData(studentId: string): Promise<StudentData> {
     try {
       return await this.httpClient.get<StudentData>(
         'student',
         `/internal/students/${studentId}/matching-data`,
       );
-    } catch {
-      this.logger.warn(
-        `No se pudo obtener datos del estudiante ${studentId}, usando datos vacíos`,
+    } catch (err) {
+      this.logger.error(
+        `No se pudo obtener datos del estudiante ${studentId}: ${(err as Error).message}`,
       );
-      return {
-        studentId,
-        userId: studentId,
-        program: '',
-        semester: 1,
-        skills: [],
-        languages: [],
-        experiences: [],
-      };
+      throw new ServiceUnavailableException(
+        `student-service no disponible: no se puede calcular matching sin datos reales del estudiante`,
+      );
     }
   }
 
@@ -672,16 +781,13 @@ export class MatchingService {
         'project',
         `/internal/projects/${projectId}/matching-data`,
       );
-    } catch {
-      this.logger.warn(
-        `No se pudo obtener datos del proyecto ${projectId}, usando datos vacíos`,
+    } catch (err) {
+      this.logger.error(
+        `No se pudo obtener datos del proyecto ${projectId}: ${(err as Error).message}`,
       );
-      return {
-        projectId,
-        title: 'Proyecto',
-        requirements: [],
-        skills: [],
-      };
+      throw new ServiceUnavailableException(
+        `project-service no disponible: no se puede calcular matching sin datos reales del proyecto`,
+      );
     }
   }
 }

@@ -58,6 +58,12 @@ export class AdminInternalController {
     return this.adminService.getProgramsByIds(idList);
   }
 
+  /** Catálogo completo de programas activos — usado por student-service (backfill/onboarding) para resolver programId por nombre. */
+  @Get('programs')
+  getInternalPrograms() {
+    return this.adminService.getPrograms(true);
+  }
+
   @Post('skills/by-names')
   resolveSkillsByNames(@Body() dto: ResolveSkillsByNamesDto) {
     return this.adminService.resolveSkillsByNames(dto.names);

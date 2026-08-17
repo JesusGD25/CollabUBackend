@@ -10,6 +10,7 @@ import {
   UseGuards,
   ParseUUIDPipe,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -110,12 +111,18 @@ export class MatchingController {
   }
 
   @Post('calculate')
-  @Roles(UserRole.ADMIN, UserRole.COMPANY)
+  @Roles(UserRole.ADMIN, UserRole.COMPANY, UserRole.STUDENT)
   @ApiOperation({
-    summary: 'Calcular/recalcular matching para un par estudiante-proyecto',
+    summary: 'Calcular/recalcular matching para un par estudiante-proyecto (un estudiante solo puede calcular el suyo)',
   })
   @ApiResponse({ status: 201 })
-  calculate(@Body() dto: CalculateMatchDto) {
+  async calculate(
+    @Body() dto: CalculateMatchDto,
+    @CurrentUser() user: { userId: string; role: string },
+  ) {
+    if (user.role === UserRole.STUDENT && dto.studentId !== user.userId) {
+      throw new ForbiddenException('Un estudiante solo puede calcular su propio matching');
+    }
     return this.matchingService.calculateAndStore(dto.studentId, dto.projectId);
   }
 

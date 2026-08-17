@@ -218,10 +218,13 @@ async function migrateAcademicPrograms() {
 
   console.log(`${touched} proyectos actualizados.`);
   if (unmatchedNames.size) {
-    console.warn(
+    // console.log (no console.warn/error): resultado informativo esperado, no una falla del
+    // proceso — PowerShell con $ErrorActionPreference="Stop" trata cualquier línea de stderr
+    // de un proceso nativo como error terminante aunque el exit code sea 0.
+    console.log(
       `Advertencia: ${unmatchedNames.size} nombres de programa no se encontraron en admin_db.academic_programs y fueron descartados: ${[...unmatchedNames].join(', ')}`,
     );
-    console.warn('Crea esos programas en el catálogo (POST /api/v1/admin/programs) y vuelve a correr el script para vincularlos.');
+    console.log('Crea esos programas en el catálogo (POST /api/v1/admin/programs) y vuelve a correr el script para vincularlos.');
   }
 }
 
