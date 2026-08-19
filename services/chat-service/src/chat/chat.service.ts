@@ -105,12 +105,19 @@ export class ChatService {
       if (existing) return this.getConversationById(existing.id, userId);
     }
 
-    // Para conversaciones de proyecto, existe UNA sola por projectId — el
-    // workspace la abre cada vez que se entra. Si ya está creada, se
-    // devuelve; los nuevos participantes se agregan como MEMBER.
+    // Para conversaciones de proyecto, existe UNA sola por (projectId, applicationId) —
+    // el workspace la abre cada vez que se entra a esa postulación específica. Si ya
+    // está creada, se devuelve; los nuevos participantes se agregan como MEMBER.
+    // Sin el filtro por applicationId, todos los candidatos de un mismo proyecto
+    // compartirían la misma conversación con la empresa (bug de privacidad).
     if (type === ConversationType.PROJECT && dto.projectId) {
       const existing = await this.conversationRepo.findOne({
-        where: { type: ConversationType.PROJECT, projectId: dto.projectId, isActive: true },
+        where: {
+          type: ConversationType.PROJECT,
+          projectId: dto.projectId,
+          applicationId: dto.applicationId ?? IsNull(),
+          isActive: true,
+        },
       });
       if (existing) {
         await this.ensureParticipants(existing.id, userId, dto.participantIds);
@@ -123,6 +130,7 @@ export class ChatService {
       name: dto.name,
       description: dto.description,
       projectId: dto.projectId,
+      applicationId: dto.applicationId,
       createdBy: userId,
       isActive: true,
     });

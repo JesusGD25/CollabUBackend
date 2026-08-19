@@ -30,6 +30,14 @@ export class Conversation {
   @Column({ name: 'project_id', type: 'uuid', nullable: true })
   projectId: string;
 
+  // Discrimina conversaciones de tipo PROJECT por postulación: sin esto, todos
+  // los estudiantes que aplican al mismo proyecto terminaban agregados a una
+  // única conversación compartida (bug de privacidad — veían mensajes entre
+  // la empresa y otros candidatos). Nullable para no romper conversaciones
+  // GROUP/DIRECT existentes, que no aplican este concepto.
+  @Column({ name: 'application_id', type: 'uuid', nullable: true })
+  applicationId: string;
+
   @Column({ name: 'avatar_url', nullable: true, length: 500 })
   avatarUrl: string;
 

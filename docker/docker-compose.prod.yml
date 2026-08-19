@@ -1,0 +1,205 @@
+# docker-compose.prod.yml — Despliegue completo tipo producción para AUDITORIA_RECURSOS_DOCKER.md
+# Creado en esta sesión: no existía en el repo (solo estaban postgres/rabbitmq/redis en docker-compose.yml).
+# Construye imagen por cada uno de los 14 microservicios NestJS (build de producción, sin ts-node/watch)
+# + frontend Angular SSR (build de producción, servidor Express, NO ng serve).
+# No modifica lógica funcional/reglas de negocio: solo empaqueta lo existente.
+#
+# Uso:
+#   cd Backend/docker
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Bases de datos: reutiliza el postgres/rabbitmq/redis ya definidos en docker-compose.yml (no se duplican).
+
+x-service-env: &service-env
+  NODE_ENV: production
+  DATABASE_HOST: postgres
+  DATABASE_PORT: 5432
+  DATABASE_USER: ${DB_USER:-collabu_admin}
+  DATABASE_PASSWORD: ${DB_PASSWORD:-collabu_secret_2025}
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-admin}:${RABBITMQ_PASSWORD:-admin}@rabbitmq:5672
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-redis_secret_2025}
+  JWT_SECRET: ${JWT_SECRET:-collabu-jwt-super-secret-key-change-in-production-2025}
+  JWT_EXPIRATION: ${JWT_EXPIRATION:-3600}
+  JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-604800}
+  SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-noreply@collab-u.udenar.edu.co}
+  # Los microservicios se llaman entre sí directamente (malla), no solo a través del gateway.
+  # shared/http-client/microservice-http-client.service.ts cae a localhost:PORT si faltan.
+  AUTH_SERVICE_URL: http://auth-service:3001
+  USER_SERVICE_URL: http://user-service:3002
+  STUDENT_SERVICE_URL: http://student-service:3003
+  COMPANY_SERVICE_URL: http://company-service:3004
+  PROJECT_SERVICE_URL: http://project-service:3005
+  APPLICATION_SERVICE_URL: http://application-service:3006
+  MATCHING_SERVICE_URL: http://matching-service:3007
+  EVALUATION_SERVICE_URL: http://evaluation-service:3008
+  NOTIFICATION_SERVICE_URL: http://notification-service:3009
+  CHAT_SERVICE_URL: http://chat-service:3010
+  ADMIN_SERVICE_URL: http://admin-service:3011
+  ANALYTICS_SERVICE_URL: http://analytics-service:3012
+  STORAGE_SERVICE_URL: http://storage-service:3013
+
+services:
+  auth-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: auth-service, SERVICE_PORT: "3001"}}
+    container_name: collab-u-auth-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3001, DATABASE_NAME: auth_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  user-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: user-service, SERVICE_PORT: "3002"}}
+    container_name: collab-u-user-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3002, DATABASE_NAME: user_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  student-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: student-service, SERVICE_PORT: "3003"}}
+    container_name: collab-u-student-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3003, DATABASE_NAME: student_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  company-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: company-service, SERVICE_PORT: "3004"}}
+    container_name: collab-u-company-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3004, DATABASE_NAME: company_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  project-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: project-service, SERVICE_PORT: "3005"}}
+    container_name: collab-u-project-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3005, DATABASE_NAME: project_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  application-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: application-service, SERVICE_PORT: "3006"}}
+    container_name: collab-u-application-service
+    restart: unless-stopped
+    # application-service usa DB_HOST/DB_PORT/... en vez de DATABASE_* (inconsistencia preexistente
+    # del código respecto a los otros 13 servicios) — se añaden ambos juegos de variables.
+    environment: {<<: *service-env, PORT: 3006, DATABASE_NAME: application_db, DB_HOST: postgres, DB_PORT: 5432, DB_USERNAME: "${DB_USER:-collabu_admin}", DB_PASSWORD: "${DB_PASSWORD:-collabu_secret_2025}", DB_NAME: application_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  matching-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: matching-service, SERVICE_PORT: "3007"}}
+    container_name: collab-u-matching-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3007, DATABASE_NAME: matching_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  evaluation-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: evaluation-service, SERVICE_PORT: "3008"}}
+    container_name: collab-u-evaluation-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3008, DATABASE_NAME: evaluation_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  notification-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: notification-service, SERVICE_PORT: "3009"}}
+    container_name: collab-u-notification-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3009, DATABASE_NAME: notification_db, DB_HOST: postgres, DB_PORT: 5432, DB_USERNAME: "${DB_USER:-collabu_admin}", DB_PASSWORD: "${DB_PASSWORD:-collabu_secret_2025}", DB_NAME: notification_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  chat-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: chat-service, SERVICE_PORT: "3010"}}
+    container_name: collab-u-chat-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3010, DATABASE_NAME: chat_db, DB_HOST: postgres, DB_PORT: 5432, DB_USERNAME: "${DB_USER:-collabu_admin}", DB_PASSWORD: "${DB_PASSWORD:-collabu_secret_2025}", DB_NAME: chat_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  admin-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: admin-service, SERVICE_PORT: "3011"}}
+    container_name: collab-u-admin-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3011, DATABASE_NAME: admin_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  analytics-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: analytics-service, SERVICE_PORT: "3012"}}
+    container_name: collab-u-analytics-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3012, DATABASE_NAME: analytics_db}
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  storage-service:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: storage-service, SERVICE_PORT: "3013"}}
+    container_name: collab-u-storage-service
+    restart: unless-stopped
+    environment: {<<: *service-env, PORT: 3013, DATABASE_NAME: storage_db, UPLOAD_DIR: /app/uploads}
+    volumes: [storage_uploads:/app/uploads]
+    depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
+    networks: [collab-u-network]
+
+  api-gateway:
+    build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: api-gateway, SERVICE_PORT: "3000"}}
+    container_name: collab-u-api-gateway
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      AUTH_SERVICE_URL: http://auth-service:3001
+      USER_SERVICE_URL: http://user-service:3002
+      STUDENT_SERVICE_URL: http://student-service:3003
+      COMPANY_SERVICE_URL: http://company-service:3004
+      PROJECT_SERVICE_URL: http://project-service:3005
+      APPLICATION_SERVICE_URL: http://application-service:3006
+      MATCHING_SERVICE_URL: http://matching-service:3007
+      EVALUATION_SERVICE_URL: http://evaluation-service:3008
+      NOTIFICATION_SERVICE_URL: http://notification-service:3009
+      CHAT_SERVICE_URL: http://chat-service:3010
+      ADMIN_SERVICE_URL: http://admin-service:3011
+      ANALYTICS_SERVICE_URL: http://analytics-service:3012
+      STORAGE_SERVICE_URL: http://storage-service:3013
+      JWT_SECRET: ${JWT_SECRET:-collabu-jwt-super-secret-key-change-in-production-2025}
+    depends_on:
+      - auth-service
+      - user-service
+      - student-service
+      - company-service
+      - project-service
+      - application-service
+      - matching-service
+      - evaluation-service
+      - notification-service
+      - chat-service
+      - admin-service
+      - analytics-service
+      - storage-service
+    networks: [collab-u-network]
+
+  frontend:
+    build: {context: ../../CollabUFrontend, dockerfile: Dockerfile}
+    container_name: collab-u-frontend
+    restart: unless-stopped
+    ports: ["4200:4000"]
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+    depends_on: [api-gateway]
+    networks: [collab-u-network]
+
+volumes:
+  storage_uploads:

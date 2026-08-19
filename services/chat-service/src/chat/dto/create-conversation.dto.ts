@@ -39,6 +39,11 @@ export class CreateConversationDto {
   @IsUUID()
   projectId?: string;
 
+  @ApiPropertyOptional({ description: 'ID de la postulación asociada (type = project) — separa la conversación por candidato dentro del mismo proyecto' })
+  @IsOptional()
+  @IsUUID()
+  applicationId?: string;
+
   @ApiPropertyOptional({ description: 'Mensaje inicial al crear la conversación' })
   @IsOptional()
   @IsString()
