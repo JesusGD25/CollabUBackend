@@ -77,6 +77,9 @@ export class StudentDeliverable {
   @Column({ name: 'reviewed_by', type: 'varchar', nullable: true })
   reviewedBy: string | null;
 
+  @Column({ name: 'reviewed_by_role', type: 'varchar', length: 50, nullable: true })
+  reviewedByRole: string | null;
+
   @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
   reviewedAt: Date | null;
 

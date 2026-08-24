@@ -316,6 +316,7 @@ describe('ApplicationController', () => {
         mockCompanyUser.id,
         DeliverableStatus.APPROVED,
         dto,
+        expect.any(String),
       );
     });
   });
@@ -337,6 +338,7 @@ describe('ApplicationController', () => {
         mockCompanyUser.id,
         DeliverableStatus.REJECTED,
         dto,
+        expect.any(String),
       );
     });
   });
@@ -358,6 +360,7 @@ describe('ApplicationController', () => {
         mockCompanyUser.id,
         DeliverableStatus.NEEDS_REVISION,
         dto,
+        expect.any(String),
       );
     });
   });

@@ -1577,7 +1577,7 @@ export class ApplicationService {
       applicationId,
       title: dto.title,
       description: dto.description,
-      fileUrl: dto.fileUrl,
+      fileUrl: dto.fileId || dto.fileUrl,
       projectDeliverableId: dto.projectDeliverableId,
       submittedAt: new Date(),
       status: DeliverableStatus.SUBMITTED,
@@ -1616,7 +1616,7 @@ export class ApplicationService {
 
     deliverable.title = dto.title ?? deliverable.title;
     deliverable.description = dto.description ?? deliverable.description;
-    deliverable.fileUrl = dto.fileUrl ?? deliverable.fileUrl;
+    deliverable.fileUrl = dto.fileId ?? dto.fileUrl ?? deliverable.fileUrl;
     const wasNeedsRevision = deliverable.status === DeliverableStatus.NEEDS_REVISION;
     deliverable.submittedAt = new Date();
     deliverable.status = DeliverableStatus.SUBMITTED;
@@ -1631,9 +1631,10 @@ export class ApplicationService {
   async reviewDeliverable(
     applicationId: string,
     deliverableId: string,
-    companyUserId: string,
+    reviewerUserId: string,
     status: DeliverableStatus.APPROVED | DeliverableStatus.REJECTED | DeliverableStatus.NEEDS_REVISION,
     dto: ReviewDeliverableDto,
+    reviewerRole?: string,
   ): Promise<StudentDeliverable> {
     const application = await this.findApplicationById(applicationId);
     const deliverable = await this.findDeliverableById(deliverableId, applicationId);
@@ -1642,10 +1643,15 @@ export class ApplicationService {
       throw new BadRequestException('Solo se pueden revisar entregables en estado "submitted"');
     }
 
+    if (status === DeliverableStatus.REJECTED && (!dto.feedback || !dto.feedback.trim())) {
+      throw new BadRequestException('El comentario de retroalimentación es obligatorio al rechazar un entregable');
+    }
+
     deliverable.status = status;
-    deliverable.feedback = dto.feedback ?? null;
+    deliverable.feedback = dto.feedback?.trim() ?? null;
     deliverable.grade = dto.grade ?? null;
-    deliverable.reviewedBy = companyUserId;
+    deliverable.reviewedBy = reviewerUserId;
+    deliverable.reviewedByRole = reviewerRole ?? null;
     deliverable.reviewedAt = new Date();
 
     const saved = await this.deliverableRepo.save(deliverable);
@@ -1657,7 +1663,8 @@ export class ApplicationService {
       studentId: application.studentId,
       status,
       grade: dto.grade,
-      reviewerUserId: companyUserId,
+      reviewerUserId,
+      reviewerRole,
     }, 'application-service');
 
     return saved;
@@ -1669,18 +1676,26 @@ export class ApplicationService {
    * privados por su flag `is_internal`.
    */
   async getDeliverables(applicationId: string, _viewerRole?: string): Promise<any[]> {
-    await this.findApplicationById(applicationId);
+    const application = await this.findApplicationById(applicationId);
     const deliverables = await this.deliverableRepo.find({
       where: { applicationId },
       relations: ['attachments'],
       order: { createdAt: 'ASC' },
     });
 
+    const participants = await this.projectAccess.getParticipants(application).catch(() => []);
+    const userMap = new Map(participants.map((p) => [p.userId, p]));
+
     const now = new Date();
-    return deliverables.map((d) => ({
-      ...d,
-      isOverdue: d.status === DeliverableStatus.PENDING && d.dueDate && new Date(d.dueDate) < now,
-    }));
+    return deliverables.map((d) => {
+      const reviewer = d.reviewedBy ? userMap.get(d.reviewedBy) : null;
+      return {
+        ...d,
+        reviewerName: reviewer?.fullName ?? null,
+        reviewerRole: d.reviewedByRole ?? reviewer?.role ?? null,
+        isOverdue: d.status === DeliverableStatus.PENDING && d.dueDate && new Date(d.dueDate) < now,
+      };
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────

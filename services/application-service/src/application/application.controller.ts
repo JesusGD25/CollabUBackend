@@ -338,13 +338,14 @@ export class ApplicationController {
     @Param('deliverableId', ParseUUIDPipe) deliverableId: string,
     @Body() dto: ReviewDeliverableDto,
   ) {
-    await this.applicationService.authorize(id, user, 'review_deliverable');
+    const auth = await this.applicationService.authorize(id, user, 'review_deliverable');
     return this.applicationService.reviewDeliverable(
       id,
       deliverableId,
       user.id,
       DeliverableStatus.APPROVED,
       dto,
+      auth.viewer?.contextRole || user.role,
     );
   }
 
@@ -357,13 +358,14 @@ export class ApplicationController {
     @Param('deliverableId', ParseUUIDPipe) deliverableId: string,
     @Body() dto: ReviewDeliverableDto,
   ) {
-    await this.applicationService.authorize(id, user, 'review_deliverable');
+    const auth = await this.applicationService.authorize(id, user, 'review_deliverable');
     return this.applicationService.reviewDeliverable(
       id,
       deliverableId,
       user.id,
       DeliverableStatus.REJECTED,
       dto,
+      auth.viewer?.contextRole || user.role,
     );
   }
 
@@ -376,13 +378,14 @@ export class ApplicationController {
     @Param('deliverableId', ParseUUIDPipe) deliverableId: string,
     @Body() dto: ReviewDeliverableDto,
   ) {
-    await this.applicationService.authorize(id, user, 'review_deliverable');
+    const auth = await this.applicationService.authorize(id, user, 'review_deliverable');
     return this.applicationService.reviewDeliverable(
       id,
       deliverableId,
       user.id,
       DeliverableStatus.NEEDS_REVISION,
       dto,
+      auth.viewer?.contextRole || user.role,
     );
   }
 

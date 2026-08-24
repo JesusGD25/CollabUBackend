@@ -20,6 +20,9 @@ import { AcademicSubmission } from './entities/academic-submission.entity';
 import { SubmissionHistory } from './entities/submission-history.entity';
 import { ProjectAcademicRecord } from './entities/project-academic-record.entity';
 import { DeliverableComment } from './entities/deliverable-comment.entity';
+import { FinalDocumentRequirement } from './entities/final-document-requirement.entity';
+import { SelectionDocumentRequest } from './entities/selection-document-request.entity';
+import { ProjectDocumentRequirement } from './entities/project-document-requirement.entity';
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -161,6 +164,9 @@ describe('ApplicationService', () => {
         { provide: getRepositoryToken(SubmissionHistory), useFactory: createMockRepo },
         { provide: getRepositoryToken(ProjectAcademicRecord), useFactory: createMockRepo },
         { provide: getRepositoryToken(DeliverableComment), useFactory: createMockRepo },
+        { provide: getRepositoryToken(FinalDocumentRequirement), useFactory: createMockRepo },
+        { provide: getRepositoryToken(SelectionDocumentRequest), useFactory: createMockRepo },
+        { provide: getRepositoryToken(ProjectDocumentRequirement), useFactory: createMockRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
         { provide: MicroserviceHttpClient, useValue: mockHttpClient },
         { provide: ProjectAccessService, useValue: mockProjectAccess },
@@ -498,8 +504,52 @@ describe('ApplicationService', () => {
         COMPANY_ID,
         DeliverableStatus.APPROVED,
         { grade: 95, feedback: 'Excelente trabajo' },
+        'company',
       );
       expect(deliverableRepo.save).toHaveBeenCalled();
+    });
+
+    it('debería rechazar un entregable cuando se proporciona retroalimentación y guardar reviewerRole', async () => {
+      const app = makeApplication();
+      const deliverable = makeDeliverable({ status: DeliverableStatus.SUBMITTED });
+      const rejected = makeDeliverable({
+        status: DeliverableStatus.REJECTED,
+        feedback: 'El informe no incluye las métricas solicitadas',
+        reviewedBy: 'faculty-uuid-1',
+        reviewedByRole: 'faculty',
+      });
+
+      applicationRepo.findOne.mockResolvedValue(app);
+      deliverableRepo.findOne.mockResolvedValue(deliverable);
+      deliverableRepo.save.mockResolvedValue(rejected);
+
+      const result = await service.reviewDeliverable(
+        APP_ID,
+        'deliverable-uuid-1',
+        'faculty-uuid-1',
+        DeliverableStatus.REJECTED,
+        { feedback: 'El informe no incluye las métricas solicitadas' },
+        'faculty',
+      );
+      expect(deliverableRepo.save).toHaveBeenCalled();
+    });
+
+    it('debería lanzar BadRequestException al rechazar sin comentario de retroalimentación', async () => {
+      const app = makeApplication();
+      const deliverable = makeDeliverable({ status: DeliverableStatus.SUBMITTED });
+
+      applicationRepo.findOne.mockResolvedValue(app);
+      deliverableRepo.findOne.mockResolvedValue(deliverable);
+
+      await expect(
+        service.reviewDeliverable(
+          APP_ID,
+          'deliverable-uuid-1',
+          COMPANY_ID,
+          DeliverableStatus.REJECTED,
+          { feedback: '   ' },
+        ),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('debería lanzar BadRequestException si el entregable no está en submitted', async () => {
@@ -518,6 +568,29 @@ describe('ApplicationService', () => {
           {},
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('getDeliverables', () => {
+    it('debería enriquecer entregables con reviewerRole y reviewerName', async () => {
+      const app = makeApplication();
+      const deliverable = makeDeliverable({
+        status: DeliverableStatus.APPROVED,
+        reviewedBy: 'user-faculty-1',
+        reviewedByRole: 'faculty',
+      });
+
+      applicationRepo.findOne.mockResolvedValue(app);
+      deliverableRepo.find.mockResolvedValue([deliverable]);
+      mockProjectAccess.getParticipants.mockResolvedValue([
+        { userId: 'user-faculty-1', fullName: 'Prof. Carlos Gómez', role: 'faculty' },
+      ]);
+
+      const list = await service.getDeliverables(APP_ID);
+
+      expect(list.length).toBe(1);
+      expect(list[0].reviewerRole).toBe('faculty');
+      expect(list[0].reviewerName).toBe('Prof. Carlos Gómez');
     });
   });
 
@@ -731,14 +804,21 @@ describe('ApplicationService', () => {
   });
 
   describe('uploadDocument', () => {
+    let projectDocRequirementRepo: any;
+
+    beforeEach(() => {
+      projectDocRequirementRepo = (service as any).projectDocRequirementRepo;
+    });
+
     it('crea un nuevo ProjectDocument cuando no existe entrega previa', async () => {
       applicationRepo.findOne.mockResolvedValue(makeApplication());
-      mockHttpClient.get.mockResolvedValue({ id: 'req-1', name: 'Carta' });
+      projectDocRequirementRepo.findOne.mockResolvedValue({ id: 'link-1' });
+      mockHttpClient.get.mockResolvedValue({ id: 'req-1', name: 'Carta', actorType: 'student' });
       documentRepo.findOne.mockResolvedValue(null);
       documentRepo.create.mockImplementation((v: any) => v);
       documentRepo.save.mockImplementation((v: any) => Promise.resolve({ id: 'doc-1', ...v }));
 
-      const result = await service.uploadDocument(APP_ID, STUDENT_ID, { requirementId: 'req-1', fileId: 'file-1' });
+      const result = await service.uploadDocument(APP_ID, STUDENT_ID, 'student', { requirementId: 'req-1', fileId: 'file-1' });
 
       expect(result.status).toBe('submitted');
       expect(result.fileId).toBe('file-1');
@@ -746,10 +826,11 @@ describe('ApplicationService', () => {
 
     it('lanza NotFoundException si el requirement no existe', async () => {
       applicationRepo.findOne.mockResolvedValue(makeApplication());
+      projectDocRequirementRepo.findOne.mockResolvedValue({ id: 'link-1' });
       mockHttpClient.get.mockRejectedValue(new Error('404'));
 
       await expect(
-        service.uploadDocument(APP_ID, STUDENT_ID, { requirementId: 'missing', fileId: 'file-1' }),
+        service.uploadDocument(APP_ID, STUDENT_ID, 'student', { requirementId: 'missing', fileId: 'file-1' }),
       ).rejects.toThrow(NotFoundException);
     });
   });
