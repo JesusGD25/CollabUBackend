@@ -50,7 +50,7 @@ export class ProjectAcademicRecord {
   @Column({ name: 'final_grade_file_id', type: 'uuid', nullable: true })
   finalGradeFileId: string | null;
 
-  @Column({ name: 'final_grade_value', type: 'decimal', precision: 3, scale: 2, nullable: true })
+  @Column({ name: 'final_grade_value', type: 'decimal', precision: 5, scale: 2, nullable: true })
   finalGradeValue: string | null;
 
   @Column({ name: 'cancellation_reason', type: 'text', nullable: true })

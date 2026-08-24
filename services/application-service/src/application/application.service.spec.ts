@@ -834,4 +834,42 @@ describe('ApplicationService', () => {
       ).rejects.toThrow(NotFoundException);
     });
   });
+
+  describe('uploadFinalGrade', () => {
+    it('debería guardar la nota final en escala 0-100 y completar el proyecto', async () => {
+      const record = {
+        id: 'record-1',
+        applicationId: APP_ID,
+        status: 'finalizing',
+        finalGradeFileId: null,
+        finalGradeValue: null,
+      };
+      academicRecordRepo.findOne.mockResolvedValue(record);
+      academicRecordRepo.save.mockImplementation((r: any) => Promise.resolve(r));
+
+      const app = makeApplication({ status: ApplicationStatus.IN_PROGRESS });
+      applicationRepo.findOne.mockResolvedValue(app);
+      applicationRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      mockProjectAccess.getProject.mockResolvedValue({ id: PROJECT_ID, title: 'Sistema Web' });
+      mockProjectAccess.getParticipants.mockResolvedValue([]);
+
+      const result = await service.uploadFinalGrade(APP_ID, 'admin-1', {
+        fileId: 'acta-file-uuid',
+        gradeValue: 95.5,
+        notifyByEmail: true,
+      });
+
+      expect(result.status).toBe('completed');
+      expect(result.finalGradeValue).toBe('95.50');
+      expect(result.finalGradeFileId).toBe('acta-file-uuid');
+      expect(academicRecordRepo.save).toHaveBeenCalled();
+      expect(applicationRepo.save).toHaveBeenCalled();
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'academic.completed',
+        expect.objectContaining({ applicationId: APP_ID, forceEmail: true }),
+        'application-service',
+      );
+    });
+  });
 });

@@ -8,11 +8,11 @@ export class UploadFinalGradeDto {
   @IsUUID()
   fileId: string;
 
-  @ApiPropertyOptional({ description: 'Nota final numérica (0-5)', minimum: 0, maximum: 5 })
+  @ApiPropertyOptional({ description: 'Nota final numérica (0-100)', minimum: 0, maximum: 100 })
   @IsOptional()
   @IsNumber()
   @Min(0)
-  @Max(5)
+  @Max(100)
   gradeValue?: number;
 
   @ApiPropertyOptional({ default: true })
