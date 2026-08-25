@@ -1,4 +1,4 @@
-import { IsUUID, IsOptional, IsString, IsUrl, MinLength, MaxLength } from 'class-validator';
+import { IsUUID, IsOptional, IsString, MinLength, MaxLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateApplicationDto {
@@ -13,13 +13,15 @@ export class CreateApplicationDto {
   @MaxLength(3000)
   coverLetter?: string;
 
-  @ApiPropertyOptional({ description: 'URL del CV en Storage Service' })
+  @ApiPropertyOptional({ description: 'URL o ruta del CV en Storage Service', maxLength: 500 })
   @IsOptional()
-  @IsUrl({ require_tld: false })
+  @IsString()
+  @MaxLength(500)
   resumeUrl?: string;
 
-  @ApiPropertyOptional({ description: 'URL del portafolio' })
+  @ApiPropertyOptional({ description: 'URL del portafolio', maxLength: 500 })
   @IsOptional()
-  @IsUrl({ require_tld: false })
+  @IsString()
+  @MaxLength(500)
   portfolioUrl?: string;
 }
