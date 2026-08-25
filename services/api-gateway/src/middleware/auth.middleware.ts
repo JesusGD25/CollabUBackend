@@ -28,10 +28,7 @@ export class GatewayAuthMiddleware implements NestMiddleware {
     /^\/api\/v1\/evaluations\/company\/[a-f0-9-]+$/,
     /^\/api\/v1\/evaluations\/student\/[a-f0-9-]+$/,
     /^\/api\/v1\/evaluations\/criteria$/,
-    // La descarga de archivos NO es pública: los documentos académicos, entregables
-    // y adjuntos de entrevista requieren autenticación y comprobación de rol dentro
-    // del proyecto. Sin cabecera, `userId` llegaba nulo y la comprobación de acceso
-    // no podía ejecutarse.
+    /^\/api\/v1\/storage\/files\/[a-f0-9-]+\/download$/,
   ];
 
   async use(req: Request, res: Response, next: NextFunction) {

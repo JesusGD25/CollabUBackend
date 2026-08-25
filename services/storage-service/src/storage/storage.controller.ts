@@ -74,8 +74,6 @@ export class StorageController {
   }
 
   @Get('files/:fileId/download')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
   @ApiOperation({ summary: 'Descargar archivo' })
   @ApiParam({ name: 'fileId', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Archivo binario' })
@@ -85,7 +83,7 @@ export class StorageController {
     @Res() res: Response,
     @CurrentUser() user: any,
   ) {
-    const userId = user?.userId || null;
+    const userId = user?.userId || user?.id || null;
     const { file, filePath } = await this.storageService.getFileForDownload(
       fileId,
       userId,

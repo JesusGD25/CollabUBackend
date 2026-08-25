@@ -169,6 +169,18 @@ describe('GatewayAuthMiddleware', () => {
 
       expect(next).toHaveBeenCalled();
     });
+
+    it('debería permitir GET /api/v1/storage/files/:uuid/download sin token', async () => {
+      const req = createReq({
+        path: '/api/v1/storage/files/a1b2c3d4-e5f6-7890-abcd-ef1234567890/download',
+        method: 'GET',
+      });
+      const res = createRes();
+
+      await middleware.use(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════
