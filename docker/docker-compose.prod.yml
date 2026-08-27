@@ -178,6 +178,10 @@ services:
       ANALYTICS_SERVICE_URL: http://analytics-service:3012
       STORAGE_SERVICE_URL: http://storage-service:3013
       JWT_SECRET: ${JWT_SECRET:-collabu-jwt-super-secret-key-change-in-production-2025}
+      # Orígenes extra permitidos por CORS (separados por coma), además de
+      # localhost:4200 y el dominio de producción hardcodeados en el código.
+      # Ej: CORS_ALLOWED_ORIGINS=http://18.218.200.202:4200
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     depends_on:
       - auth-service
       - user-service

@@ -12,11 +12,18 @@ async function bootstrap() {
   // Especialmente útil cuando muchos servicios pasan por el proxy
   process.setMaxListeners(20);
 
-  // CORS
+  // CORS — orígenes fijos de dev/producción + los que se agreguen por env
+  // (CORS_ALLOWED_ORIGINS, separados por coma) para no tener que hardcodear
+  // cada IP/dominio de despliegue en el código.
+  const extraOrigins = (process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
   app.enableCors({
     origin: [
       'http://localhost:4200',
       'https://collab-u.udenar.edu.co',
+      ...extraOrigins,
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

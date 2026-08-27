@@ -107,4 +107,32 @@ Si `Run-Seed.ps1` falla con "No se pudo resolver el catálogo de skills/programa
 
 Si `application-service`, `chat-service` o `notification-service` entran en crash-loop contra Postgres al arrancar: esos 3 usan `DB_HOST/DB_PORT/DB_USERNAME/DB_PASSWORD/DB_NAME` en vez de `DATABASE_*` como el resto — revisar que su bloque `environment` en `docker-compose.prod.yml` tenga ambos juegos de variables.
 
+Si al abrir el frontend por IP pública o dominio (no `localhost`) sale un error 400 en `docker logs collab-u-frontend` tipo `ERROR: Bad Request ("http://TU-IP:4200/"). URL with hostname "TU-IP" is not allowed.`: es una protección anti-SSRF de `@angular/ssr` (Angular 19+), no un bug nuestro. El servidor SSR solo confía en los hosts listados en la variable **`NG_ALLOWED_HOSTS`** (formato: solo hostnames separados por coma, sin `http://` ni puerto — ej. `18.218.200.202,mi-dominio.com`). En `docker-compose.prod.yml` el servicio `frontend` la lee desde `FRONTEND_ALLOWED_HOSTS` en `.env`. Cada vez que cambie la IP pública o se agregue un dominio, hay que actualizar esa variable y recrear el contenedor:
+```bash
+echo "FRONTEND_ALLOWED_HOSTS=<tu-ip-o-dominio>" >> .env
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate --no-build frontend
+```
+Más info: https://angular.dev/best-practices/security#preventing-server-side-request-forgery-ssrf
+
+## Despliegue en un servidor remoto (EC2 u otro VPS)
+
+Si el código vive en dos repos Git separados (backend/frontend) en vez de en esta carpeta local, clonarlos como hermanos dentro de una misma carpeta padre — el compose referencia el frontend como `../../CollabUFrontend` relativo a `Backend/docker/`:
+```bash
+mkdir -p ~/collabu && cd ~/collabu
+git clone -b <rama> <url-repo-backend> Backend
+git clone -b <rama> <url-repo-frontend> CollabUFrontend
+```
+
+En el servidor hace falta, además de Docker: **Node.js** (para los scripts de seed `generate-seed-files.mjs`/`migrate-*.mjs`, que corren en el host, no en Docker) y **PowerShell** (para `Run-Seed.ps1`). Ver instrucciones de instalación de ambos y de Docker Engine en un Ubuntu Server limpio en el historial de esta sesión, o pedir de nuevo la guía completa paso a paso.
+
+**No dejar los secretos por defecto del repo en un servidor expuesto a internet** (`collabu_secret_2025`, `admin/admin`, el `JWT_SECRET` de ejemplo, etc. están en el código, visibles para cualquiera). Generar valores propios en `Backend/docker/.env` con `openssl rand -hex 24` (evitar `base64`: puede generar `/` que rompe la `RABBITMQ_URL`, que embebe el password directo en una URL).
+
+Al construir las 15 imágenes en una VM con pocos vCPU, `docker compose build` corriendo los 15 builds en paralelo puede saturar CPU/red y causar fallos de red intermitentes contra el registro de npm. Si pasa, buildear de a uno:
+```bash
+for s in auth-service user-service student-service company-service project-service application-service matching-service evaluation-service notification-service chat-service admin-service analytics-service storage-service api-gateway frontend; do
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml build "$s" || { echo "FALLÓ $s"; break; }
+done
+```
+Y correr el build (y cualquier paso largo) dentro de `tmux`/`screen` — si se corta la conexión SSH a mitad de un comando en primer plano, el comando muere con la sesión. Los contenedores ya levantados (`docker compose up -d`) no dependen de esto, son independientes de la sesión SSH/tmux una vez arrancados.
+
 Ver `AUDITORIA_RECURSOS_DOCKER.md` para el detalle completo de estos hallazgos y las correcciones aplicadas.
