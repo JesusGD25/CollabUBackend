@@ -202,6 +202,11 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
+      # @angular/ssr valida el Host header contra este origen (protección SSRF
+      # de Angular 19+) — sin esto, rechaza cualquier request que no venga de
+      # http://localhost:4200 con "URL with hostname X is not allowed".
+      # Poner acá la URL pública real por la que se accede (IP o dominio).
+      ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4200}
     depends_on: [api-gateway]
     networks: [collab-u-network]
 
