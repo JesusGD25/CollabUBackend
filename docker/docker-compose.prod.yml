@@ -131,6 +131,10 @@ services:
     build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: admin-service, SERVICE_PORT: "3011"}}
     container_name: collab-u-admin-service
     restart: unless-stopped
+    # Publicado al host porque Backend/scripts/migrate-skills-unification.mjs y
+    # migrate-student-program.mjs (invocados por Run-Seed.ps1) corren en el host,
+    # no en Docker, y pegan a ADMIN_SERVICE_URL=http://localhost:3011 por defecto.
+    ports: ["3011:3011"]
     environment: {<<: *service-env, PORT: 3011, DATABASE_NAME: admin_db}
     depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
     networks: [collab-u-network]
