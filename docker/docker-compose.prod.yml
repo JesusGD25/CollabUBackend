@@ -202,11 +202,12 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      # @angular/ssr valida el Host header contra este origen (protección SSRF
-      # de Angular 19+) — sin esto, rechaza cualquier request que no venga de
-      # http://localhost:4200 con "URL with hostname X is not allowed".
-      # Poner acá la URL pública real por la que se accede (IP o dominio).
-      ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4200}
+      # @angular/ssr (node.mjs, AngularNodeAppEngine) valida el header Host contra
+      # esta lista (protección SSRF de Angular) — sin esto, rechaza cualquier
+      # request que no venga de "localhost" con "URL with hostname X is not allowed".
+      # Formato: solo hostnames separados por coma, SIN http:// ni puerto.
+      # Ej: NG_ALLOWED_HOSTS=18.218.200.202,mi-dominio.com
+      NG_ALLOWED_HOSTS: ${FRONTEND_ALLOWED_HOSTS:-localhost}
     depends_on: [api-gateway]
     networks: [collab-u-network]
 
