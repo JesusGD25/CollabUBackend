@@ -28,6 +28,11 @@ x-service-env: &service-env
   SMTP_USER: ${SMTP_USER:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_FROM: ${SMTP_FROM:-noreply@collab-u.udenar.edu.co}
+  # URL pública del frontend — auth-service la usa para armar los links de
+  # verificación de email y reset de contraseña que van EN el correo real
+  # (auth.service.ts: verifyUrl/resetUrl). Sin esto cae a localhost:4200,
+  # que el navegador del usuario no puede resolver.
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:4200}
   # Los microservicios se llaman entre sí directamente (malla), no solo a través del gateway.
   # shared/http-client/microservice-http-client.service.ts cae a localhost:PORT si faltan.
   AUTH_SERVICE_URL: http://auth-service:3001
@@ -151,7 +156,11 @@ services:
     build: {context: .., dockerfile: docker/Dockerfile.service, args: {SERVICE_NAME: storage-service, SERVICE_PORT: "3013"}}
     container_name: collab-u-storage-service
     restart: unless-stopped
-    environment: {<<: *service-env, PORT: 3013, DATABASE_NAME: storage_db, UPLOAD_DIR: /app/uploads}
+    # STORAGE_BASE_URL: URL pública por la que el navegador del usuario puede
+    # llegar a este servicio para links de descarga firmados (POST
+    # /files/:id/signed-url) — apunta al gateway (3000), no al puerto interno
+    # 3013 de storage-service, que no está publicado al host.
+    environment: {<<: *service-env, PORT: 3013, DATABASE_NAME: storage_db, UPLOAD_DIR: /app/uploads, STORAGE_BASE_URL: "${STORAGE_BASE_URL:-http://localhost:3000}"}
     volumes: [storage_uploads:/app/uploads]
     depends_on: {postgres: {condition: service_healthy}, rabbitmq: {condition: service_healthy}}
     networks: [collab-u-network]
