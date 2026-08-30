@@ -149,6 +149,9 @@ describe('ChatService', () => {
 
     service = module.get<ChatService>(ChatService);
     jest.clearAllMocks();
+    // mapMessage() carga adjuntos por consulta separada (ver chat.service.ts) —
+    // por defecto sin adjuntos; los tests que los necesiten sobreescriben esto.
+    attachmentRepo.find.mockResolvedValue([]);
   });
 
   // ── createConversation ───────────────────────────────────────────

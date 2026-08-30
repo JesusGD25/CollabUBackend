@@ -14,6 +14,8 @@ import { SystemSetting } from './entities/system-setting.entity';
 import { ProjectRejectionCategory } from './entities/project-rejection-category.entity';
 import { AcademicTemplate } from './entities/academic-template.entity';
 import { DocumentRequirement } from './entities/document-requirement.entity';
+import { SkillCatalog } from './entities/skill-catalog.entity';
+import { SkillProgramMapping } from './entities/skill-program-mapping.entity';
 
 // ─── Repository mock factory ─────────────────────────────────────────────────
 
@@ -50,6 +52,8 @@ describe('AdminService', () => {
   let historyRepo: ReturnType<typeof repoMock>;
   let templateRepo: ReturnType<typeof repoMock>;
   let documentRequirementRepo: ReturnType<typeof repoMock>;
+  let skillCatalogRepo: ReturnType<typeof repoMock>;
+  let skillProgramMappingRepo: ReturnType<typeof repoMock>;
 
   beforeEach(async () => {
     periodRepo = repoMock();
@@ -62,6 +66,8 @@ describe('AdminService', () => {
     historyRepo = repoMock();
     templateRepo = repoMock();
     documentRequirementRepo = repoMock();
+    skillCatalogRepo = repoMock();
+    skillProgramMappingRepo = repoMock();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -76,6 +82,8 @@ describe('AdminService', () => {
         { provide: getRepositoryToken(SupervisorAssignmentHistory), useValue: historyRepo },
         { provide: getRepositoryToken(AcademicTemplate), useValue: templateRepo },
         { provide: getRepositoryToken(DocumentRequirement), useValue: documentRequirementRepo },
+        { provide: getRepositoryToken(SkillCatalog), useValue: skillCatalogRepo },
+        { provide: getRepositoryToken(SkillProgramMapping), useValue: skillProgramMappingRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
         { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
@@ -315,8 +323,13 @@ describe('AdminService', () => {
         'admin-service',
       );
       expect(result[0].id).toBe('asgn-1');
-      // No debe iniciar el proyecto todavía — eso ocurre solo cuando el asesor acepta.
-      expect(mockHttpClient.patch).not.toHaveBeenCalled();
+      // Marca la aplicación como pending_supervisor (espera aceptación del asesor) —
+      // no la avanza a in_progress, eso ocurre solo cuando el asesor acepta.
+      expect(mockHttpClient.patch).toHaveBeenCalledWith(
+        'application',
+        '/internal/applications/app-1/pending-supervisor',
+        {},
+      );
     });
 
     it('should NOT start the project/application immediately — only on acceptance', async () => {
@@ -332,7 +345,14 @@ describe('AdminService', () => {
 
       await service.assignSupervisor('admin-1', dto as any);
 
-      expect(mockHttpClient.patch).not.toHaveBeenCalled();
+      // Marca pending_supervisor (esperado), pero nunca llama a un endpoint que
+      // avance la aplicación a in_progress — eso solo ocurre en acceptAssignment.
+      expect(mockHttpClient.patch).toHaveBeenCalledTimes(1);
+      expect(mockHttpClient.patch).not.toHaveBeenCalledWith(
+        'application',
+        expect.stringContaining('/start'),
+        expect.anything(),
+      );
     });
 
     it('should throw BadRequestException if supervisor is not active', async () => {
@@ -509,7 +529,18 @@ describe('AdminService', () => {
       expect(result.status).toBe(AssignmentStatus.DECLINED);
       expect(result.declineReason).toBe('No tengo disponibilidad');
       expect(supervisorRepo.decrement).toHaveBeenCalledWith({ id: 'sup-1' }, 'currentStudents', 1);
-      expect(mockHttpClient.patch).not.toHaveBeenCalled();
+      // Revierte la aplicación a accepted (para permitir reasignar), pero nunca
+      // llama start-progress — eso solo ocurre en acceptAssignment.
+      expect(mockHttpClient.patch).toHaveBeenCalledWith(
+        'application',
+        '/internal/applications/app-1/revert-accepted',
+        {},
+      );
+      expect(mockHttpClient.patch).not.toHaveBeenCalledWith(
+        'application',
+        expect.stringContaining('start-progress'),
+        expect.anything(),
+      );
     });
 
     it('declineAssignment: jurado cannot decline', async () => {

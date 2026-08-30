@@ -77,7 +77,7 @@ describe('EvaluationService', () => {
   let mockRatingRepo: ReturnType<typeof createMockRepo>;
   let mockTemplateRepo: ReturnType<typeof createMockRepo>;
   let mockEventPublisher: { publish: jest.Mock };
-  let mockHttpClient: { get: jest.Mock; patch: jest.Mock };
+  let mockHttpClient: { get: jest.Mock; patch: jest.Mock; post: jest.Mock };
 
   beforeEach(async () => {
     mockEvaluationRepo = createMockRepo();
@@ -85,7 +85,13 @@ describe('EvaluationService', () => {
     mockRatingRepo = createMockRepo();
     mockTemplateRepo = createMockRepo();
     mockEventPublisher = { publish: jest.fn().mockResolvedValue(undefined) };
-    mockHttpClient = { get: jest.fn().mockResolvedValue({ status: 'completed' }), patch: jest.fn().mockResolvedValue(null) };
+    mockHttpClient = {
+      get: jest.fn().mockResolvedValue({ status: 'completed' }),
+      patch: jest.fn().mockResolvedValue(null),
+      // enrichEvaluations() hace batch-fetch de título de proyecto / nombres de
+      // usuario vía post() — por defecto sin resultados, no enriquece nada.
+      post: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -100,6 +106,9 @@ describe('EvaluationService', () => {
     }).compile();
 
     service = module.get<EvaluationService>(EvaluationService);
+    // findByApplication()/findById() ahora hacen batch-fetch de ratings —
+    // por defecto sin ratings; los tests que los necesiten sobreescriben esto.
+    mockRatingRepo.find.mockResolvedValue([]);
   });
 
   afterEach(() => jest.clearAllMocks());

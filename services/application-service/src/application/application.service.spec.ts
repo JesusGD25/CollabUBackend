@@ -801,6 +801,137 @@ describe('ApplicationService', () => {
         'application-service',
       );
     });
+
+    // ─── Regla de unanimidad (protección de regresión) ──────────────────────
+    // "N jurados asignados + N vistos buenos = aceptación" — no es mayoría.
+    // Basta un solo rechazo, una vez que todos votaron, para rechazar.
+
+    it('2 jurados: 2/2 approve resulta en approved (unanimidad total)', async () => {
+      const twoJurados = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a2', supervisorId: 's2', supervisorUserId: 'faculty-jurado-2', role: 'jurado_anteproyecto', status: 'accepted' },
+      ];
+      mockHttpClient.get
+        .mockResolvedValueOnce(twoJurados)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(twoJurados)
+        .mockResolvedValueOnce(twoJurados);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'under_review', correctionCount: 2,
+        juradoVotes: { 'faculty-jurado': 'approve' },
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      academicRecordRepo.findOne.mockResolvedValue({ id: 'rec-1', applicationId: APP_ID, status: 'waiting_anteproyecto' });
+      academicRecordRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado-2', { action: 'approve' as any });
+
+      expect(result.status).toBe('approved');
+      expect(academicRecordRepo.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'waiting_documents' }));
+    });
+
+    it('3 jurados: 1/3 approve deja under_review (falta consenso)', async () => {
+      const threeJurados = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado-1', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a2', supervisorId: 's2', supervisorUserId: 'faculty-jurado-2', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a3', supervisorId: 's3', supervisorUserId: 'faculty-jurado-3', role: 'jurado_anteproyecto', status: 'accepted' },
+      ];
+      mockHttpClient.get
+        .mockResolvedValueOnce(threeJurados)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(threeJurados)
+        .mockResolvedValueOnce(threeJurados);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'revised', correctionCount: 2, juradoVotes: null,
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado-1', { action: 'approve' as any });
+
+      expect(result.status).toBe('under_review');
+      expect(academicRecordRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('3 jurados: 2/3 approve + 1 reject resulta en rejected — 2/3 NO acepta (no es mayoría)', async () => {
+      const threeJurados = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado-1', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a2', supervisorId: 's2', supervisorUserId: 'faculty-jurado-2', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a3', supervisorId: 's3', supervisorUserId: 'faculty-jurado-3', role: 'jurado_anteproyecto', status: 'accepted' },
+      ];
+      mockHttpClient.get
+        .mockResolvedValueOnce(threeJurados)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(threeJurados)
+        .mockResolvedValueOnce(threeJurados);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'under_review', correctionCount: 2,
+        juradoVotes: { 'faculty-jurado-1': 'approve', 'faculty-jurado-2': 'approve' },
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado-3', { action: 'reject' as any, comment: 'no cumple los objetivos' });
+
+      expect(result.status).toBe('rejected');
+      expect(academicRecordRepo.save).not.toHaveBeenCalled();
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'academic.anteproyecto.rejected',
+        expect.objectContaining({ applicationId: APP_ID }),
+        'application-service',
+      );
+    });
+
+    it('3 jurados: 3/3 approve resulta en approved (unanimidad total)', async () => {
+      const threeJurados = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-jurado-1', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a2', supervisorId: 's2', supervisorUserId: 'faculty-jurado-2', role: 'jurado_anteproyecto', status: 'accepted' },
+        { id: 'a3', supervisorId: 's3', supervisorUserId: 'faculty-jurado-3', role: 'jurado_anteproyecto', status: 'accepted' },
+      ];
+      mockHttpClient.get
+        .mockResolvedValueOnce(threeJurados)
+        .mockResolvedValueOnce({ value: 2 })
+        .mockResolvedValueOnce(threeJurados)
+        .mockResolvedValueOnce(threeJurados);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'under_review', correctionCount: 2,
+        juradoVotes: { 'faculty-jurado-1': 'approve', 'faculty-jurado-2': 'approve' },
+      });
+      submissionRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+      applicationRepo.findOne.mockResolvedValue(makeApplication());
+      academicRecordRepo.findOne.mockResolvedValue({ id: 'rec-1', applicationId: APP_ID, status: 'waiting_anteproyecto' });
+      academicRecordRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+
+      const result = await service.reviewAnteproyecto(APP_ID, 'faculty-jurado-3', { action: 'approve' as any });
+
+      expect(result.status).toBe('approved');
+      expect(academicRecordRepo.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'waiting_documents' }));
+    });
+
+    it('el asesor no puede votar como jurado de anteproyecto', async () => {
+      const asesorAssignment = [
+        { id: 'a1', supervisorId: 's1', supervisorUserId: 'faculty-asesor', role: 'asesor', status: 'accepted' },
+      ];
+      mockHttpClient.get.mockResolvedValueOnce(asesorAssignment);
+
+      await expect(
+        service.reviewAnteproyecto(APP_ID, 'faculty-asesor', { action: 'approve' as any }),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('no se puede aprobar/revisar mientras el anteproyecto está en needs_revision (corrección pendiente del estudiante)', async () => {
+      // El chequeo de reviewableStates ocurre antes de leer maxCorrections, así
+      // que solo se consume la llamada de getFacultyRoleForApplication.
+      mockHttpClient.get.mockResolvedValueOnce(juradoAssignment);
+      submissionRepo.findOne.mockResolvedValue({
+        id: 'sub-1', applicationId: APP_ID, status: 'needs_revision', correctionCount: 1,
+      });
+
+      await expect(
+        service.reviewAnteproyecto(APP_ID, 'faculty-jurado', { action: 'approve' as any }),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   describe('uploadDocument', () => {
