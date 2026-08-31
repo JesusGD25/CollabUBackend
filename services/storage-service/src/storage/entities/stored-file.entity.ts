@@ -18,6 +18,10 @@ export enum FileCategory {
   COMPANY_DOCUMENT = 'company_document',
   CHAT_ATTACHMENT = 'chat_attachment',
   REPORT = 'report',
+  INTERVIEW_ATTACHMENT = 'interview_attachment',
+  TEMPLATE = 'template',
+  ACADEMIC_DOCUMENT = 'academic_document',
+  PROJECT_DOCUMENT = 'project_document',
   OTHER = 'other',
 }
 

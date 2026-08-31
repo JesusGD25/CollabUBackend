@@ -4,6 +4,7 @@ import { HttpModule, HttpService } from '@nestjs/axios';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { AdminController } from './admin.controller';
+import { AdminInternalController } from './admin-internal.controller';
 import { AdminService } from './admin.service';
 import { AdminEventsSubscriber } from './admin-events.subscriber';
 
@@ -13,7 +14,13 @@ import {
   CompanyVerification,
   Supervisor,
   SupervisorAssignment,
+  SupervisorAssignmentHistory,
   SystemSetting,
+  ProjectRejectionCategory,
+  AcademicTemplate,
+  DocumentRequirement,
+  SkillCatalog,
+  SkillProgramMapping,
 } from './entities';
 
 @Module({
@@ -24,11 +31,17 @@ import {
       CompanyVerification,
       Supervisor,
       SupervisorAssignment,
+      SupervisorAssignmentHistory,
       SystemSetting,
+      ProjectRejectionCategory,
+      AcademicTemplate,
+      DocumentRequirement,
+      SkillCatalog,
+      SkillProgramMapping,
     ]),
     HttpModule,
   ],
-  controllers: [AdminController],
+  controllers: [AdminController, AdminInternalController],
   providers: [
     AdminService,
     AdminEventsSubscriber,

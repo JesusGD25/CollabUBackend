@@ -31,7 +31,7 @@ export class CreateExperienceDto {
   companyName?: string;
 
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID()
   companyId?: string;
 
   @IsOptional()

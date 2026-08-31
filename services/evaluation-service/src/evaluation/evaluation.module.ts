@@ -11,6 +11,7 @@ import { EvaluationTemplate } from './entities/evaluation-template.entity';
 import { EvaluationService } from './evaluation.service';
 import { EvaluationController } from './evaluation.controller';
 import { EvaluationInternalController } from './evaluation-internal.controller';
+import { EvaluationSubscriber } from './evaluation.subscriber';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { EvaluationInternalController } from './evaluation-internal.controller';
   controllers: [EvaluationController, EvaluationInternalController],
   providers: [
     EvaluationService,
+    EvaluationSubscriber,
     EventPublisher,
     {
       provide: MicroserviceHttpClient,

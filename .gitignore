@@ -27,6 +27,7 @@ docker/postgres_data/
 docker/rabbitmq_data/
 docker/redis_data/
 docker/uploads/
+services/*/uploads/
 
 # Logs
 logs/

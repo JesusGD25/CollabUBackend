@@ -4,6 +4,7 @@ import {
   Post,
   Put,
   Patch,
+  Delete,
   Body,
   Param,
   ParseUUIDPipe,
@@ -39,7 +40,20 @@ import {
   UpdateSystemSettingDto,
   PeriodsQueryDto,
   UpdateSupervisorDto,
+  CreateRejectionCategoryDto,
+  UpdateRejectionCategoryDto,
+  DeclineAssignmentDto,
+  ReplaceAssignmentDto,
+  CreateAcademicTemplateDto,
+  UpdateAcademicTemplateDto,
+  CreateDocumentRequirementDto,
+  UpdateDocumentRequirementDto,
+  AssignJuradoDto,
+  CreateSkillCatalogDto,
+  UpdateSkillCatalogDto,
+  AssociateSkillProgramsDto,
 } from './dto';
+import { SkillCategory } from './entities';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -158,9 +172,14 @@ export class AdminController {
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'Listar supervisores' })
   @ApiQuery({ name: 'isActive', required: false, type: Boolean })
-  getSupervisors(@Query('isActive') isActive?: string) {
+  @ApiQuery({ name: 'onboardingComplete', required: false, type: Boolean })
+  getSupervisors(
+    @Query('isActive') isActive?: string,
+    @Query('onboardingComplete') onboardingComplete?: string,
+  ) {
     const active = isActive !== undefined ? isActive === 'true' : undefined;
-    return this.adminService.getSupervisors(active);
+    const onboarded = onboardingComplete !== undefined ? onboardingComplete === 'true' : undefined;
+    return this.adminService.getSupervisors(active, onboarded);
   }
 
   @Post('supervisors')
@@ -175,6 +194,13 @@ export class AdminController {
   @ApiOperation({ summary: 'Asignar supervisor académico a estudiante/proyecto' })
   assignSupervisor(@CurrentUser() user: any, @Body() dto: AssignSupervisorDto) {
     return this.adminService.assignSupervisor(user.id, dto);
+  }
+
+  @Post('supervisors/assign-jurado')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Asignar jurado final (auto-aceptado)' })
+  assignJurado(@CurrentUser() user: any, @Body() dto: AssignJuradoDto) {
+    return this.adminService.assignJurado(user.id, dto);
   }
 
   @Get('supervisors/my-students')
@@ -206,6 +232,54 @@ export class AdminController {
     @Param('id') id: string,
   ) {
     return this.adminService.getAssignmentById(id, user.id);
+  }
+
+  @Patch('supervisors/assignments/:id/accept')
+  @Roles(UserRole.FACULTY)
+  @ApiOperation({ summary: 'Aceptar mi asignación como asesor (inicia el proyecto)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  acceptAssignment(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.adminService.acceptAssignment(id, user.id);
+  }
+
+  @Patch('supervisors/assignments/:id/decline')
+  @Roles(UserRole.FACULTY)
+  @ApiOperation({ summary: 'Declinar mi asignación como asesor (con motivo)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  declineAssignment(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: DeclineAssignmentDto,
+  ) {
+    return this.adminService.declineAssignment(id, user.id, dto);
+  }
+
+  @Patch('supervisors/assignments/:id/replace')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Reemplazar al asesor de una asignación' })
+  @ApiParam({ name: 'id', type: 'string' })
+  replaceAssignment(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: ReplaceAssignmentDto,
+  ) {
+    return this.adminService.replaceAssignment(id, user.id, dto);
+  }
+
+  @Patch('supervisors/assignments/:id/disconnect')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Desvincular a un jurado al completar su fase' })
+  @ApiParam({ name: 'id', type: 'string' })
+  disconnectAssignment(@CurrentUser() user: any, @Param('id') id: string) {
+    return this.adminService.disconnectAssignment(id, user.id);
+  }
+
+  @Get('supervisors/assignments/:id/history')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY)
+  @ApiOperation({ summary: 'Historial de una asignación (creación, aceptación, reemplazos, etc.)' })
+  @ApiParam({ name: 'id', type: 'string' })
+  getAssignmentHistory(@Param('id') id: string) {
+    return this.adminService.getAssignmentHistory(id);
   }
 
   @Get('supervisors/me')
@@ -245,5 +319,193 @@ export class AdminController {
   @ApiOperation({ summary: 'Obtener configuración por clave' })
   getSettingByKey(@Param('key') key: string) {
     return this.adminService.getSettingByKey(key);
+  }
+
+  // ─── Categorías de rechazo de proyectos ───────────────────────────────────────
+
+  @Get('rejection-categories')
+  @Roles(UserRole.ADMIN, UserRole.COMPANY, UserRole.FACULTY)
+  @ApiOperation({ summary: 'Listar categorías de rechazo de proyectos' })
+  @ApiQuery({ name: 'onlyActive', required: false, type: Boolean })
+  getRejectionCategories(@Query('onlyActive') onlyActive?: string) {
+    return this.adminService.getRejectionCategories(onlyActive === 'true');
+  }
+
+  @Post('rejection-categories')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Crear categoría de rechazo de proyecto' })
+  createRejectionCategory(@Body() dto: CreateRejectionCategoryDto) {
+    return this.adminService.createRejectionCategory(dto);
+  }
+
+  @Patch('rejection-categories/:id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Actualizar categoría de rechazo de proyecto' })
+  updateRejectionCategory(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateRejectionCategoryDto,
+  ) {
+    return this.adminService.updateRejectionCategory(id, dto);
+  }
+
+  // ─── Plantillas académicas ─────────────────────────────────────────────────────
+
+  @Get('templates')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Listar plantillas de documentos académicos' })
+  @ApiQuery({ name: 'programCode', required: false, type: String })
+  @ApiQuery({ name: 'type', required: false, type: String })
+  @ApiQuery({ name: 'onlyActive', required: false, type: Boolean })
+  getTemplates(
+    @Query('programCode') programCode?: string,
+    @Query('type') type?: string,
+    @Query('onlyActive') onlyActive?: string,
+  ) {
+    return this.adminService.getTemplates(programCode, type, onlyActive === 'true');
+  }
+
+  @Post('templates')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Registrar plantilla de documento académico' })
+  createTemplate(@CurrentUser() user: any, @Body() dto: CreateAcademicTemplateDto) {
+    return this.adminService.createTemplate(user.id, dto);
+  }
+
+  @Get('templates/:id')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Obtener plantilla por ID' })
+  getTemplateById(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getTemplateById(id);
+  }
+
+  @Patch('templates/:id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Actualizar plantilla de documento académico' })
+  updateTemplate(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateAcademicTemplateDto) {
+    return this.adminService.updateTemplate(id, dto);
+  }
+
+  // ─── Documentos requeridos ──────────────────────────────────────────────────────
+
+  @Get('document-requirements')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Listar documentos requeridos configurados' })
+  @ApiQuery({ name: 'actorType', required: false, type: String })
+  @ApiQuery({ name: 'requiredAtStage', required: false, type: String })
+  @ApiQuery({ name: 'projectType', required: false, type: String })
+  @ApiQuery({ name: 'onlyActive', required: false, type: Boolean })
+  getDocumentRequirements(
+    @Query('actorType') actorType?: string,
+    @Query('requiredAtStage') requiredAtStage?: string,
+    @Query('projectType') projectType?: string,
+    @Query('onlyActive') onlyActive?: string,
+  ) {
+    return this.adminService.getDocumentRequirements({
+      actorType,
+      requiredAtStage,
+      projectType,
+      onlyActive: onlyActive === 'true',
+    });
+  }
+
+  @Post('document-requirements')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Configurar un documento requerido' })
+  createDocumentRequirement(@CurrentUser() user: any, @Body() dto: CreateDocumentRequirementDto) {
+    return this.adminService.createDocumentRequirement(user.id, dto);
+  }
+
+  @Get('document-requirements/:id')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Obtener documento requerido por ID' })
+  getDocumentRequirementById(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getDocumentRequirementById(id);
+  }
+
+  @Patch('document-requirements/:id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Actualizar documento requerido' })
+  updateDocumentRequirement(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDocumentRequirementDto,
+  ) {
+    return this.adminService.updateDocumentRequirement(id, dto);
+  }
+
+  // ─── Catálogo de habilidades ────────────────────────────────────────────────────
+
+  @Get('skills')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Listar catálogo de habilidades' })
+  @ApiQuery({ name: 'programId', required: false, type: String })
+  @ApiQuery({ name: 'category', required: false, enum: SkillCategory })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'includeInactive', required: false, type: Boolean })
+  getSkills(
+    @CurrentUser() user: any,
+    @Query('programId') programId?: string,
+    @Query('category') category?: SkillCategory,
+    @Query('search') search?: string,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
+    // Solo el admin puede ver habilidades desactivadas (para gestionar el catálogo).
+    const onlyActive = !(includeInactive === 'true' && user?.role === UserRole.ADMIN);
+    return this.adminService.getSkills({ programId, category, search, onlyActive });
+  }
+
+  @Post('skills')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Crear habilidad en el catálogo' })
+  createSkill(@CurrentUser() user: any, @Body() dto: CreateSkillCatalogDto) {
+    return this.adminService.createSkill(user.id, dto);
+  }
+
+  @Get('skills/by-program/:programId')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Listar habilidades asociadas a un programa académico' })
+  getSkillsByProgram(@Param('programId', ParseUUIDPipe) programId: string) {
+    return this.adminService.getSkillsByProgram(programId);
+  }
+
+  @Get('skills/:id')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
+  @ApiOperation({ summary: 'Obtener habilidad del catálogo por ID' })
+  getSkillById(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.getSkillById(id);
+  }
+
+  @Patch('skills/:id')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Actualizar habilidad del catálogo' })
+  updateSkill(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSkillCatalogDto) {
+    return this.adminService.updateSkill(id, dto);
+  }
+
+  @Patch('skills/:id/deactivate')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Desactivar habilidad del catálogo (soft-delete)' })
+  deactivateSkill(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adminService.deactivateSkill(id);
+  }
+
+  @Post('skills/:skillId/programs')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Asociar habilidad a uno o más programas académicos' })
+  associateSkillPrograms(
+    @Param('skillId', ParseUUIDPipe) skillId: string,
+    @Body() dto: AssociateSkillProgramsDto,
+  ) {
+    return this.adminService.associateSkillPrograms(skillId, dto.programIds);
+  }
+
+  @Delete('skills/:skillId/programs/:programId')
+  @Roles(UserRole.ADMIN)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Desasociar habilidad de un programa académico' })
+  disassociateSkillProgram(
+    @Param('skillId', ParseUUIDPipe) skillId: string,
+    @Param('programId', ParseUUIDPipe) programId: string,
+  ) {
+    return this.adminService.disassociateSkillProgram(skillId, programId);
   }
 }

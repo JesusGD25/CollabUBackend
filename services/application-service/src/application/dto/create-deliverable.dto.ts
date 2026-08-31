@@ -25,6 +25,11 @@ export class CreateDeliverableDto {
 
   @ApiPropertyOptional({ description: 'UUID del proyect_deliverable (plantilla)' })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID()
   projectDeliverableId?: string;
+
+  @ApiPropertyOptional({ description: 'Archivo de referencia/plantilla subido a Storage' })
+  @IsOptional()
+  @IsUUID()
+  templateFileId?: string;
 }

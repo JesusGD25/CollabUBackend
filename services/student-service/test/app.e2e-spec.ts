@@ -1,25 +1,13 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+
+// Pega contra el proceso real ya corriendo (ver nota de diseño en
+// matching-service/test/matching-integration.e2e-spec.ts: bootear una segunda instancia de
+// AppModule vía Test.createTestingModule quedaba colgada indefinidamente, muy probablemente el
+// EventSubscriber/RabbitMQModule intentando una segunda suscripción concurrente).
+const BASE_URL = process.env.STUDENT_SERVICE_URL || 'http://localhost:3003';
 
 describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
-
-  beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    await app.init();
-  });
-
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  it('/health (GET)', () => {
+    return request(BASE_URL).get('/health').expect(200);
   });
 });

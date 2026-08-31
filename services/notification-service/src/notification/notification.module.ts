@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { HttpModule, HttpService } from '@nestjs/axios';
+import { MicroserviceHttpClient } from '@collab-u/shared';
 
 import { Notification } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
@@ -13,6 +15,7 @@ import { NotificationService } from './notification.service';
 import { NotificationController } from './notification.controller';
 import { NotificationInternalController } from './notification-internal.controller';
 import { NotificationGateway } from './notification.gateway';
+import { MailerService } from './mailer.service';
 import { EventPublisher } from '@collab-u/shared';
 
 @Module({
@@ -24,6 +27,7 @@ import { EventPublisher } from '@collab-u/shared';
       NotificationTemplate,
       PushSubscription,
     ]),
+    HttpModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -36,7 +40,17 @@ import { EventPublisher } from '@collab-u/shared';
     }),
   ],
   controllers: [NotificationController, NotificationInternalController],
-  providers: [NotificationService, EventPublisher, NotificationGateway],
-  exports: [NotificationService, NotificationGateway],
+  providers: [
+    NotificationService,
+    EventPublisher,
+    NotificationGateway,
+    MailerService,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => new MicroserviceHttpClient(httpService as any),
+      inject: [HttpService],
+    },
+  ],
+  exports: [NotificationService, NotificationGateway, MicroserviceHttpClient],
 })
 export class NotificationModule {}

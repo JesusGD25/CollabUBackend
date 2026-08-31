@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { HttpModule, HttpService } from '@nestjs/axios';
+import { MicroserviceHttpClient } from '@collab-u/shared';
 
 import { StudentProfile } from './entities/student-profile.entity';
 import { Skill } from './entities/skill.entity';
@@ -24,9 +26,17 @@ import { StudentInternalController } from './student-internal.controller';
       Language,
       Interest,
     ]),
+    HttpModule,
   ],
   controllers: [StudentController, StudentInternalController],
-  providers: [StudentService],
+  providers: [
+    StudentService,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => new MicroserviceHttpClient(httpService as any),
+      inject: [HttpService],
+    },
+  ],
   exports: [StudentService],
 })
 export class StudentModule {}

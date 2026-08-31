@@ -1,25 +1,17 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { App } from 'supertest/types';
-import { AppModule } from './../src/app.module';
+
+// Pega contra el proceso real ya corriendo, no contra una segunda instancia de
+// AppModule vía Test.createTestingModule: ese enfoque queda colgado indefinidamente
+// cuando el proceso nativo ya está corriendo y suscrito a RabbitMQ (segunda
+// suscripción concurrente sobre las mismas colas — ver matching-integration.e2e-spec.ts
+// para la investigación original). Además AppController/AppService (boilerplate de
+// `nest new`) nunca se registran en AppModule en ningún servicio — GET '/' nunca
+// respondió "Hello World!" en producción, así que ese no es un comportamiento real que
+// deba probarse; `/health` sí lo es.
+const BASE_URL = process.env.COMPANY_SERVICE_URL || 'http://localhost:3004';
 
 describe('AppController (e2e)', () => {
-  let app: INestApplication<App>;
-
-  beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    await app.init();
-  });
-
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  it('/health (GET)', () => {
+    return request(BASE_URL).get('/health').expect(200);
   });
 });

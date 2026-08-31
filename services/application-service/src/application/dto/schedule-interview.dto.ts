@@ -4,7 +4,6 @@ import {
   IsOptional,
   IsString,
   IsInt,
-  IsUrl,
   IsUUID,
   Min,
   Max,
@@ -33,13 +32,18 @@ export class ScheduleInterviewDto {
   @IsString()
   location?: string;
 
-  @ApiPropertyOptional({ description: 'Link de la videollamada' })
+  @ApiPropertyOptional({ description: 'Enlace de videollamada, o número de contacto para entrevista telefónica' })
   @IsOptional()
-  @IsUrl()
+  @IsString()
   meetingLink?: string;
 
   @ApiPropertyOptional({ description: 'UUID del entrevistador (si es diferente al usuario actual)' })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID()
   interviewerId?: string;
+
+  @ApiPropertyOptional({ description: 'Notas de la empresa al programar (guardadas como interviewerNotes)' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }

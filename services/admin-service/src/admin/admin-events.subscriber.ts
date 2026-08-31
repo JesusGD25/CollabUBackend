@@ -40,5 +40,19 @@ export class AdminEventsSubscriber implements OnModuleInit {
         }
       },
     );
+
+    await this.eventSubscriber.subscribe(
+      'admin-service.academic.anteproyecto.approved',
+      'academic.anteproyecto.approved',
+      async (event) => {
+        const { applicationId } = event.data;
+        this.logger.log(`Evento recibido: academic.anteproyecto.approved para aplicación ${applicationId} — desvinculando jurado(s)`);
+        try {
+          await this.adminService.autoDisconnectJuradosAnteproyecto(applicationId);
+        } catch (error: any) {
+          this.logger.error(`Error desvinculando jurados de ${applicationId}: ${error.message}`, error.stack);
+        }
+      },
+    );
   }
 }

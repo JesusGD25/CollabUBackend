@@ -34,6 +34,7 @@ const REFRESH_TOKEN_DAYS = 7;
 const VERIFICATION_TOKEN_HOURS = 24;
 const RESET_TOKEN_HOURS = 1;
 const RESEND_VERIFICATION_COOLDOWN_SECONDS = 60;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:4200';
 
 @Injectable()
 export class AuthService {
@@ -50,8 +51,17 @@ export class AuthService {
     private readonly eventPublisher: EventPublisher,
   ) {}
 
-  // ─── REGISTER ───────────────────────────────────────────────────────
+  // ─── REGISTER (público — solo student/company) ────────────────────────
+  // Las cuentas admin/faculty NUNCA se crean por auto-registro público — solo
+  // desde el panel de administración vía POST /api/v1/auth/admin/users
+  // (createAdminUser), guardado por @Roles(ADMIN). Ver auth.controller.ts.
   async register(dto: RegisterDto): Promise<{ message: string; userId: string }> {
+    if (dto.role !== UserRole.STUDENT && dto.role !== UserRole.COMPANY) {
+      throw new BadRequestException(
+        'El auto-registro solo está disponible para estudiantes y empresas. Las cuentas de administrador y docente son creadas por la Facultad.',
+      );
+    }
+
     // 1. Verificar que email no exista
     const existing = await this.userRepo.findOne({ where: { email: dto.email } });
     if (existing) {
@@ -82,6 +92,19 @@ export class AuthService {
     await this.eventPublisher.publish(
       'auth.user.created',
       { userId: savedUser.id, email: savedUser.email, role: savedUser.role },
+      'auth-service',
+    );
+
+    // 6. Publicar evento para que notification-service envíe el correo de
+    // verificación — separado de auth.user.created porque ese evento ya tiene
+    // otros consumidores (perfil, etc.) y no debería acoplarse al envío de email.
+    await this.eventPublisher.publish(
+      'auth.email_verification.requested',
+      {
+        userId: savedUser.id,
+        email: savedUser.email,
+        verifyUrl: `${FRONTEND_URL}/auth/verify-email?token=${verificationToken.token}`,
+      },
       'auth-service',
     );
 
@@ -120,12 +143,9 @@ export class AuthService {
       throw new UnauthorizedException('La cuenta está desactivada');
     }
 
-    // TEMP: Mientras no esté habilitado el flujo de envío/verificación de correo,
-    // permitimos login aunque el email no esté verificado.
-    // Restaurar esta validación cuando el flujo de verificación esté operativo.
-    // if (!user.isVerified) {
-    //   throw new UnauthorizedException('Debes verificar tu correo antes de iniciar sesión');
-    // }
+    if (!user.isVerified) {
+      throw new UnauthorizedException('Debes verificar tu correo antes de iniciar sesión');
+    }
 
     // 4. Comparar password
     const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
@@ -353,13 +373,23 @@ export class AuthService {
     });
     await this.verificationTokenRepo.save(verificationToken);
 
+    await this.eventPublisher.publish(
+      'auth.email_verification.requested',
+      {
+        userId: user.id,
+        email: user.email,
+        verifyUrl: `${FRONTEND_URL}/auth/verify-email?token=${verificationToken.token}`,
+      },
+      'auth-service',
+    );
+
     this.logger.log(`Nuevo token de verificación generado para usuario ${user.id}`);
 
     return { message: genericMessage };
   }
 
   // ─── FORGOT PASSWORD ───────────────────────────────────────────────
-  async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string; token?: string }> {
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
     const user = await this.userRepo.findOne({ where: { email: dto.email } });
 
     // Siempre retornamos el mismo mensaje (prevenir enumeración de emails)
@@ -378,13 +408,19 @@ export class AuthService {
     });
     await this.verificationTokenRepo.save(resetToken);
 
+    await this.eventPublisher.publish(
+      'auth.password_reset.requested',
+      {
+        userId: user.id,
+        email: user.email,
+        resetUrl: `${FRONTEND_URL}/auth/reset-password?token=${resetToken.token}`,
+      },
+      'auth-service',
+    );
+
     this.logger.log(`Token de reset generado para: ${user.email}`);
 
-    // En producción: enviar email. Por ahora retornamos el token para testing
-    return {
-      message: successMessage,
-      token: resetToken.token, // Solo para dev/testing
-    };
+    return { message: successMessage };
   }
 
   // ─── RESET PASSWORD ────────────────────────────────────────────────
@@ -509,6 +545,15 @@ export class AuthService {
       isVerified: user.isVerified,
       isActive: user.isActive,
     };
+  }
+
+  // ─── GET USERS BY ROLE (interno) ────────────────────────────────────
+  async getUsersByRole(role: UserRole): Promise<{ id: string; email: string }[]> {
+    const users = await this.userRepo.find({
+      where: { role, isActive: true },
+      select: ['id', 'email'],
+    });
+    return users.map((u) => ({ id: u.id, email: u.email }));
   }
 
   // ─── GET USER ROLE (interno) ───────────────────────────────────────

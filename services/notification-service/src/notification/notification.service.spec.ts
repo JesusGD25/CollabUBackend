@@ -1,12 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { NotificationService } from './notification.service';
 import { Notification, NotificationType, NotificationChannel, NotificationPriority } from './entities/notification.entity';
 import { NotificationPreferences } from './entities/notification-preferences.entity';
 import { PushSubscription, DeviceType } from './entities/push-subscription.entity';
+import { EmailQueue } from './entities/email-queue.entity';
+import { NotificationGateway } from './notification.gateway';
+import { MailerService } from './mailer.service';
 
 const mockNotificationRepo = {
   create: jest.fn(),
@@ -31,8 +34,28 @@ const mockPushSubscriptionRepo = {
   remove: jest.fn(),
 };
 
+const mockEmailQueueRepo = {
+  create: jest.fn(),
+  save: jest.fn(),
+};
+
 const mockEventPublisher = {
   publish: jest.fn(),
+};
+
+const mockNotificationGateway = {
+  sendNotificationToUser: jest.fn(),
+  sendUnreadCountToUser: jest.fn(),
+};
+
+const mockMailerService = {
+  send: jest.fn().mockResolvedValue(true),
+};
+
+const mockHttpClient = {
+  get: jest.fn(),
+  post: jest.fn(),
+  patch: jest.fn(),
 };
 
 const mockQueryBuilder = {
@@ -49,13 +72,32 @@ describe('NotificationService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
 
+    // Default: preferencias existentes con todo habilitado, salvo que un test sobreescriba el mock.
+    mockPreferencesRepo.findOne.mockResolvedValue({
+      userId: 'default-user',
+      inAppEnabled: true,
+      emailEnabled: true,
+      pushEnabled: true,
+      applicationUpdates: true,
+      interviewReminders: true,
+      evaluationAlerts: true,
+      matchRecommendations: true,
+      projectUpdates: true,
+      chatMessages: true,
+      systemAnnouncements: true,
+    });
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         NotificationService,
         { provide: getRepositoryToken(Notification), useValue: mockNotificationRepo },
         { provide: getRepositoryToken(NotificationPreferences), useValue: mockPreferencesRepo },
         { provide: getRepositoryToken(PushSubscription), useValue: mockPushSubscriptionRepo },
+        { provide: getRepositoryToken(EmailQueue), useValue: mockEmailQueueRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
+        { provide: NotificationGateway, useValue: mockNotificationGateway },
+        { provide: MailerService, useValue: mockMailerService },
+        { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
     }).compile();
 

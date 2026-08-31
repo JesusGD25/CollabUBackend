@@ -1,5 +1,6 @@
-import { IsString, IsOptional, IsNumber, Min, Max } from 'class-validator';
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsString, IsOptional, IsNumber, IsEnum, Min, Max } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { InterviewResolution } from '../entities/enums';
 
 export class CompleteInterviewDto {
   @ApiPropertyOptional({ description: 'Notas del entrevistador' })
@@ -13,6 +14,15 @@ export class CompleteInterviewDto {
   @Min(0)
   @Max(100)
   score?: number;
+
+  @ApiProperty({ enum: InterviewResolution, description: 'Resolución de la empresa sobre el candidato tras esta entrevista' })
+  @IsEnum(InterviewResolution)
+  resolution: InterviewResolution;
+
+  @ApiPropertyOptional({ description: 'Comentario de la empresa sobre el candidato (visible solo para la empresa)' })
+  @IsOptional()
+  @IsString()
+  resolutionComment?: string;
 }
 
 export class CancelInterviewDto {
@@ -31,4 +41,10 @@ export class RescheduleInterviewDto {
   @IsOptional()
   @IsString()
   reason?: string;
+}
+
+export class StudentInterviewFeedbackDto {
+  @ApiProperty({ description: 'Comentario del estudiante sobre la entrevista' })
+  @IsString()
+  studentFeedback: string;
 }

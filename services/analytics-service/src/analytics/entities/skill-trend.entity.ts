@@ -8,6 +8,10 @@ export class SkillTrend {
   @Column({ name: 'skill_name', length: 100 })
   skillName: string;
 
+  /** Referencia opcional al catálogo maestro de habilidades (admin-service), para joins más robustos. */
+  @Column({ name: 'catalog_skill_id', type: 'uuid', nullable: true })
+  catalogSkillId: string | null;
+
   @Column({ name: 'demand_count', default: 0 })
   demandCount: number;
 

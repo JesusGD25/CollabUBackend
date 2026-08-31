@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -19,6 +20,11 @@ export class UpdateStudentProfileDto {
   @IsNotEmpty()
   @MaxLength(150)
   program?: string;
+
+  /** Opcional durante la transición: si se envía, debe existir en admin_service.academic_programs. */
+  @IsOptional()
+  @IsUUID('4', { message: 'programId debe ser un UUID v4 válido' })
+  programId?: string;
 
   @IsOptional()
   @IsString()

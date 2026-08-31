@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { StorageService } from './storage.service';
 import { StoredFile, FileCategory, FileStatus } from './entities/stored-file.entity';
@@ -31,6 +31,11 @@ jest.mock('crypto', () => ({
 
 const mockEventPublisher = {
   publish: jest.fn().mockResolvedValue(undefined),
+};
+
+const mockHttpClient = {
+  get: jest.fn(),
+  post: jest.fn(),
 };
 
 const createMockRepo = () => ({
@@ -124,6 +129,7 @@ describe('StorageService', () => {
         { provide: getRepositoryToken(FileVersion), useFactory: createMockRepo },
         { provide: getRepositoryToken(StorageQuota), useFactory: createMockRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
+        { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
     }).compile();
 
@@ -281,12 +287,29 @@ describe('StorageService', () => {
     });
 
     it('debería lanzar ForbiddenException si no es propietario ni público', async () => {
-      const file = createMockStoredFile({ ownerId: 'other-user', isPublic: false });
+      const file = createMockStoredFile({
+        ownerId: 'other-user',
+        isPublic: false,
+        category: FileCategory.AVATAR,
+      });
       fileRepo.findOne.mockResolvedValue(file);
 
       await expect(
         service.getFileInfo('file-uuid-1', 'user-uuid-1'),
       ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('debería aplicar el mismo criterio que la descarga: si puede abrirlo, ve sus metadatos', async () => {
+      const file = createMockStoredFile({
+        ownerId: 'student-uuid',
+        isPublic: false,
+        category: FileCategory.ACADEMIC_DOCUMENT,
+      });
+      fileRepo.findOne.mockResolvedValue(file);
+      mockHttpClient.post.mockResolvedValue({ allowed: true });
+
+      const result = await service.getFileInfo('file-uuid-1', 'jurado-uuid', 'faculty');
+      expect(result).toBeDefined();
     });
 
     it('debería permitir acceso a archivos públicos', async () => {
@@ -406,6 +429,100 @@ describe('StorageService', () => {
 
       expect(result).toBeDefined();
       expect(quotaRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // DESCARGA Y AUTORIZACIÓN CONTEXTUAL
+  // ═══════════════════════════════════════════════════════════════════
+  describe('getFileForDownload', () => {
+    const academicFile = (overrides = {}) =>
+      createMockStoredFile({
+        ownerId: 'student-uuid',
+        category: FileCategory.ACADEMIC_DOCUMENT,
+        isPublic: false,
+        ...overrides,
+      });
+
+    it('permite al propietario sin consultar a otros servicios', async () => {
+      fileRepo.findOne.mockResolvedValue(academicFile());
+
+      const result = await service.getFileForDownload('file-uuid-1', 'student-uuid', 'student');
+
+      expect(result.file).toBeDefined();
+      expect(mockHttpClient.post).not.toHaveBeenCalled();
+    });
+
+    it('permite a un tercero cuando Application Service lo autoriza', async () => {
+      fileRepo.findOne.mockResolvedValue(academicFile());
+      mockHttpClient.post.mockResolvedValue({ allowed: true });
+
+      const result = await service.getFileForDownload('file-uuid-1', 'jurado-uuid', 'faculty');
+
+      expect(result.file).toBeDefined();
+      expect(mockHttpClient.post).toHaveBeenCalledWith(
+        'application',
+        '/internal/applications/files/can-access',
+        { fileId: 'file-uuid-1', userId: 'jurado-uuid', userRole: 'faculty' },
+      );
+    });
+
+    it('deniega cuando Application Service responde que no', async () => {
+      fileRepo.findOne.mockResolvedValue(academicFile());
+      mockHttpClient.post.mockResolvedValue({ allowed: false, reason: 'not_a_participant' });
+
+      await expect(
+        service.getFileForDownload('file-uuid-1', 'ajeno-uuid', 'student'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('deniega si la consulta entre servicios falla — nunca abre por defecto', async () => {
+      fileRepo.findOne.mockResolvedValue(academicFile());
+      mockHttpClient.post.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(
+        service.getFileForDownload('file-uuid-1', 'jurado-uuid', 'faculty'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('deniega a un usuario anónimo un archivo no público', async () => {
+      fileRepo.findOne.mockResolvedValue(academicFile());
+
+      await expect(service.getFileForDownload('file-uuid-1', null, null)).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockHttpClient.post).not.toHaveBeenCalled();
+    });
+
+    it('permite un archivo público sin comprobar nada', async () => {
+      fileRepo.findOne.mockResolvedValue(
+        createMockStoredFile({ ownerId: 'otro', isPublic: true, category: FileCategory.TEMPLATE }),
+      );
+
+      const result = await service.getFileForDownload('file-uuid-1', null, null);
+
+      expect(result.file).toBeDefined();
+      expect(mockHttpClient.post).not.toHaveBeenCalled();
+    });
+
+    it('no delega categorías ajenas al flujo académico', async () => {
+      fileRepo.findOne.mockResolvedValue(
+        createMockStoredFile({ ownerId: 'otro', category: FileCategory.AVATAR, isPublic: false }),
+      );
+
+      await expect(
+        service.getFileForDownload('file-uuid-1', 'user-uuid-1', 'student'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockHttpClient.post).not.toHaveBeenCalled();
+    });
+
+    it('lanza NotFoundException si el archivo físico no existe', async () => {
+      fileRepo.findOne.mockResolvedValue(academicFile({ ownerId: 'user-uuid-1' }));
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+
+      await expect(
+        service.getFileForDownload('file-uuid-1', 'user-uuid-1', 'student'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

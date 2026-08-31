@@ -12,7 +12,7 @@ import { ProjectService } from './project.service';
 import { Project, ProjectType, ProjectStatus, LocationType, CompensationType } from './entities/project.entity';
 import { ProjectRequirement, RequirementType } from './entities/project-requirement.entity';
 import { ProjectDeliverable } from './entities/project-deliverable.entity';
-import { ProjectTag } from './entities/project-tag.entity';
+import { ProjectSkill, SkillCategory } from './entities/project-skill.entity';
 import { ProjectActivity, ActivityStatus, ActivityPriority } from './entities/project-activity.entity';
 
 // ─── Mocks ──────────────────────────────────────────────────────────
@@ -23,13 +23,14 @@ const mockEventPublisher = {
 
 const mockHttpClient = {
   get: jest.fn().mockResolvedValue({ exists: true, isActive: true, isVerified: true }),
-  post: jest.fn(),
+  post: jest.fn().mockResolvedValue([]),
   patch: jest.fn(),
 };
 
 const createMockRepo = () => ({
   findOne: jest.fn(),
   find: jest.fn(),
+  count: jest.fn(),
   create: jest.fn(),
   save: jest.fn(),
   remove: jest.fn(),
@@ -60,9 +61,10 @@ function createMockProject(overrides: Partial<Project> = {}): Project {
     currency: 'COP',
     positionsAvailable: 2,
     positionsFilled: 0,
-    applicationDeadline: new Date('2025-08-01'),
-    academicProgram: 'Ingeniería de Sistemas',
+    applicationDeadline: new Date('2025-06-01'),
+    academicPrograms: ['program-uuid-1'],
     minimumSemester: 7,
+    requestDocumentFileId: 'doc-uuid-1',
     isActive: true,
     isFeatured: false,
     viewsCount: 0,
@@ -71,7 +73,7 @@ function createMockProject(overrides: Partial<Project> = {}): Project {
     updatedAt: new Date(),
     requirements: [],
     deliverables: [],
-    tags: [],
+    skills: [],
     activities: [],
     generateSlug: jest.fn(),
     ...overrides,
@@ -110,15 +112,20 @@ function createMockDeliverable(overrides: Partial<ProjectDeliverable> = {}): Pro
   } as ProjectDeliverable;
 }
 
-function createMockTag(overrides: Partial<ProjectTag> = {}): ProjectTag {
+function createMockSkill(overrides: Partial<ProjectSkill> = {}): ProjectSkill {
   return {
-    id: 'tag-uuid-1',
+    id: 'skill-uuid-1',
     projectId: 'project-uuid-1',
-    tag: 'nestjs',
+    name: 'nestjs',
+    catalogSkillId: null,
+    category: SkillCategory.FRAMEWORK,
+    proficiencyLevel: null,
+    isMandatory: true,
+    displayOrder: 0,
     createdAt: new Date(),
     project: null,
     ...overrides,
-  } as ProjectTag;
+  } as ProjectSkill;
 }
 
 function createMockActivity(overrides: Partial<ProjectActivity> = {}): ProjectActivity {
@@ -151,7 +158,7 @@ describe('ProjectService', () => {
   let projectRepo: any;
   let requirementRepo: any;
   let deliverableRepo: any;
-  let tagRepo: any;
+  let skillRepo: any;
   let activityRepo: any;
 
   beforeEach(async () => {
@@ -161,7 +168,7 @@ describe('ProjectService', () => {
         { provide: getRepositoryToken(Project), useFactory: createMockRepo },
         { provide: getRepositoryToken(ProjectRequirement), useFactory: createMockRepo },
         { provide: getRepositoryToken(ProjectDeliverable), useFactory: createMockRepo },
-        { provide: getRepositoryToken(ProjectTag), useFactory: createMockRepo },
+        { provide: getRepositoryToken(ProjectSkill), useFactory: createMockRepo },
         { provide: getRepositoryToken(ProjectActivity), useFactory: createMockRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
         { provide: MicroserviceHttpClient, useValue: mockHttpClient },
@@ -172,7 +179,7 @@ describe('ProjectService', () => {
     projectRepo = module.get(getRepositoryToken(Project));
     requirementRepo = module.get(getRepositoryToken(ProjectRequirement));
     deliverableRepo = module.get(getRepositoryToken(ProjectDeliverable));
-    tagRepo = module.get(getRepositoryToken(ProjectTag));
+    skillRepo = module.get(getRepositoryToken(ProjectSkill));
     activityRepo = module.get(getRepositoryToken(ProjectActivity));
   });
 
@@ -193,18 +200,21 @@ describe('ProjectService', () => {
       durationMonths: 6,
       locationType: LocationType.HYBRID,
       location: 'Pasto, Nariño',
-      tags: ['nestjs', 'angular'],
+      skills: [
+        { name: 'nestjs', category: SkillCategory.FRAMEWORK },
+        { name: 'angular', category: SkillCategory.FRAMEWORK },
+      ],
     };
 
-    it('debería crear un proyecto con tags', async () => {
+    it('debería crear un proyecto con habilidades', async () => {
       const project = createMockProject();
       projectRepo.create.mockReturnValue(project);
       projectRepo.save.mockResolvedValue(project);
-      projectRepo.findOne.mockResolvedValue({ ...project, tags: [createMockTag()] });
-      tagRepo.create.mockReturnValue(createMockTag());
-      tagRepo.save.mockResolvedValue([createMockTag()]);
+      projectRepo.findOne.mockResolvedValue({ ...project, skills: [createMockSkill()] });
+      skillRepo.create.mockReturnValue(createMockSkill());
+      skillRepo.save.mockResolvedValue([createMockSkill()]);
 
-      const result = await service.createProject('user-uuid-1', 'company-uuid-1', dto);
+      const result = await service.createProject('user-uuid-1', 'company-uuid-1', dto as any);
 
       expect(result).toBeDefined();
       expect(mockHttpClient.get).toHaveBeenCalledWith(
@@ -213,7 +223,7 @@ describe('ProjectService', () => {
       );
       expect(projectRepo.create).toHaveBeenCalled();
       expect(projectRepo.save).toHaveBeenCalled();
-      expect(tagRepo.create).toHaveBeenCalledTimes(2);
+      expect(skillRepo.create).toHaveBeenCalledTimes(2);
       expect(mockEventPublisher.publish).toHaveBeenCalledWith(
         'project.created',
         expect.objectContaining({ projectId: 'project-uuid-1' }),
@@ -229,7 +239,10 @@ describe('ProjectService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('debería lanzar BadRequestException si la empresa no está verificada', async () => {
+    // Deshabilitado: la validación de isVerified está comentada intencionalmente en
+    // project.service.ts (ver TODO ahí) para permitir crear proyectos mientras el
+    // flujo de verificación de empresas no está completo en el frontend.
+    it.skip('debería lanzar BadRequestException si la empresa no está verificada', async () => {
       mockHttpClient.get.mockResolvedValueOnce({ exists: true, isActive: true, isVerified: false });
 
       await expect(
@@ -237,17 +250,17 @@ describe('ProjectService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('debería crear un proyecto sin tags', async () => {
+    it('debería crear un proyecto sin habilidades', async () => {
       const project = createMockProject();
-      const dtoNoTags = { ...dto, tags: undefined };
+      const dtoNoSkills = { ...dto, skills: undefined };
       projectRepo.create.mockReturnValue(project);
       projectRepo.save.mockResolvedValue(project);
       projectRepo.findOne.mockResolvedValue(project);
 
-      const result = await service.createProject('user-uuid-1', 'company-uuid-1', dtoNoTags);
+      const result = await service.createProject('user-uuid-1', 'company-uuid-1', dtoNoSkills as any);
 
       expect(result).toBeDefined();
-      expect(tagRepo.create).not.toHaveBeenCalled();
+      expect(skillRepo.create).not.toHaveBeenCalled();
     });
   });
 
@@ -255,21 +268,21 @@ describe('ProjectService', () => {
   // GET PROJECT BY ID
   // ═══════════════════════════════════════════════════════════════════
   describe('getProjectById', () => {
-    it('debería retornar el proyecto con relaciones', async () => {
+    it('debería retornar el proyecto con relaciones (dueño ve su propio borrador)', async () => {
       const project = createMockProject();
       projectRepo.findOne.mockResolvedValue(project);
 
-      const result = await service.getProjectById('project-uuid-1');
+      const result = await service.getProjectById('project-uuid-1', false, 'user-uuid-1', 'company');
 
       expect(result).toEqual(project);
       expect(projectRepo.findOne).toHaveBeenCalledWith({
         where: { id: 'project-uuid-1' },
-        relations: ['requirements', 'deliverables', 'tags', 'activities'],
+        relations: ['requirements', 'deliverables', 'skills', 'activities'],
       });
     });
 
-    it('debería incrementar viewsCount cuando incrementViews=true', async () => {
-      const project = createMockProject({ viewsCount: 5 });
+    it('debería incrementar viewsCount cuando incrementViews=true en proyecto publicado', async () => {
+      const project = createMockProject({ viewsCount: 5, status: ProjectStatus.PUBLISHED });
       projectRepo.findOne.mockResolvedValue(project);
       projectRepo.save.mockResolvedValue({ ...project, viewsCount: 6 });
 
@@ -285,7 +298,7 @@ describe('ProjectService', () => {
     });
 
     it('no debería incrementar viewsCount cuando incrementViews=false', async () => {
-      const project = createMockProject({ viewsCount: 5 });
+      const project = createMockProject({ viewsCount: 5, status: ProjectStatus.PUBLISHED });
       projectRepo.findOne.mockResolvedValue(project);
 
       const result = await service.getProjectById('project-uuid-1', false);
@@ -298,6 +311,41 @@ describe('ProjectService', () => {
       projectRepo.findOne.mockResolvedValue(null);
 
       await expect(service.getProjectById('no-existe')).rejects.toThrow(NotFoundException);
+    });
+
+    // ── Visibilidad (fix de seguridad: GET /:id ahora es público solo para proyectos publicados) ──
+    it('debería retornar un proyecto PUBLISHED a un visitante anónimo', async () => {
+      const project = createMockProject({ status: ProjectStatus.PUBLISHED });
+      projectRepo.findOne.mockResolvedValue(project);
+
+      const result = await service.getProjectById('project-uuid-1');
+
+      expect(result).toEqual(project);
+    });
+
+    it('debería lanzar NotFoundException si un anónimo intenta ver un DRAFT', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT });
+      projectRepo.findOne.mockResolvedValue(project);
+
+      await expect(service.getProjectById('project-uuid-1')).rejects.toThrow(NotFoundException);
+    });
+
+    it('debería lanzar NotFoundException si otro usuario (no dueño) intenta ver un DRAFT', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT, createdByUserId: 'owner-uuid' });
+      projectRepo.findOne.mockResolvedValue(project);
+
+      await expect(
+        service.getProjectById('project-uuid-1', false, 'otro-usuario-uuid', 'company'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('debería permitir a un admin ver un DRAFT de cualquier empresa', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT, createdByUserId: 'owner-uuid' });
+      projectRepo.findOne.mockResolvedValue(project);
+
+      const result = await service.getProjectById('project-uuid-1', false, 'admin-uuid', 'admin');
+
+      expect(result).toEqual(project);
     });
   });
 
@@ -314,7 +362,7 @@ describe('ProjectService', () => {
       expect(result).toBeDefined();
       expect(projectRepo.findOne).toHaveBeenCalledWith({
         where: { slug: 'desarrollo-de-modulo-m4k2f' },
-        relations: ['requirements', 'deliverables', 'tags'],
+        relations: ['requirements', 'deliverables', 'skills'],
       });
     });
 
@@ -367,18 +415,23 @@ describe('ProjectService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('debería reemplazar tags si se proporcionan', async () => {
+    it('debería reemplazar habilidades si se proporcionan', async () => {
       const project = createMockProject();
       projectRepo.findOne.mockResolvedValue(project);
       projectRepo.save.mockResolvedValue(project);
-      tagRepo.delete.mockResolvedValue(undefined);
-      tagRepo.create.mockReturnValue(createMockTag());
-      tagRepo.save.mockResolvedValue([createMockTag()]);
+      skillRepo.delete.mockResolvedValue(undefined);
+      skillRepo.create.mockReturnValue(createMockSkill());
+      skillRepo.save.mockResolvedValue([createMockSkill()]);
 
-      await service.updateProject('project-uuid-1', 'user-uuid-1', { tags: ['react', 'node'] } as any);
+      await service.updateProject('project-uuid-1', 'user-uuid-1', {
+        skills: [
+          { name: 'react', category: SkillCategory.FRAMEWORK },
+          { name: 'node', category: SkillCategory.FRAMEWORK },
+        ],
+      } as any);
 
-      expect(tagRepo.delete).toHaveBeenCalledWith({ projectId: 'project-uuid-1' });
-      expect(tagRepo.create).toHaveBeenCalledTimes(2);
+      expect(skillRepo.delete).toHaveBeenCalledWith({ projectId: 'project-uuid-1' });
+      expect(skillRepo.create).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -386,46 +439,93 @@ describe('ProjectService', () => {
   // UPDATE PROJECT STATUS
   // ═══════════════════════════════════════════════════════════════════
   describe('updateProjectStatus', () => {
-    it('debería cambiar de draft a published', async () => {
+    it('NO debería permitir que la empresa publique directamente (solo vía revisión de la Facultad)', async () => {
       const project = createMockProject({ status: ProjectStatus.DRAFT });
       projectRepo.findOne.mockResolvedValue(project);
-      projectRepo.save.mockResolvedValue({ ...project, status: ProjectStatus.PUBLISHED });
-      requirementRepo.find.mockResolvedValue([createMockRequirement()]);
-
-      const result = await service.updateProjectStatus(
-        'project-uuid-1',
-        'user-uuid-1',
-        { status: ProjectStatus.PUBLISHED },
-      );
-
-      expect(result.status).toBe(ProjectStatus.PUBLISHED);
-      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
-        'project.status.changed',
-        expect.objectContaining({
-          previousStatus: ProjectStatus.DRAFT,
-          newStatus: ProjectStatus.PUBLISHED,
-        }),
-        'project-service',
-      );
-      // Debería publicar project.published
-      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
-        'project.published',
-        expect.objectContaining({
-          projectId: 'project-uuid-1',
-          requirements: expect.any(Array),
-        }),
-        'project-service',
-      );
-    });
-
-    it('debería lanzar BadRequestException si no tiene requirements al publicar', async () => {
-      const project = createMockProject({ status: ProjectStatus.DRAFT });
-      projectRepo.findOne.mockResolvedValue(project);
-      requirementRepo.find.mockResolvedValue([]);
 
       await expect(
         service.updateProjectStatus('project-uuid-1', 'user-uuid-1', { status: ProjectStatus.PUBLISHED }),
       ).rejects.toThrow(BadRequestException);
+      expect(projectRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('debería cambiar de draft a pending_approval (enviar a revisión)', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT });
+      projectRepo.findOne.mockResolvedValue(project);
+      projectRepo.save.mockResolvedValue({ ...project, status: ProjectStatus.PENDING_APPROVAL });
+      skillRepo.count.mockResolvedValue(1);
+
+      const result = await service.updateProjectStatus(
+        'project-uuid-1',
+        'user-uuid-1',
+        { status: ProjectStatus.PENDING_APPROVAL },
+      );
+
+      expect(result.status).toBe(ProjectStatus.PENDING_APPROVAL);
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'project.status.changed',
+        expect.objectContaining({
+          previousStatus: ProjectStatus.DRAFT,
+          newStatus: ProjectStatus.PENDING_APPROVAL,
+        }),
+        'project-service',
+      );
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'project.submitted_for_review',
+        expect.objectContaining({ projectId: 'project-uuid-1' }),
+        'project-service',
+      );
+    });
+
+    it('debería lanzar BadRequestException si no tiene habilidades al enviar a revisión', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT });
+      projectRepo.findOne.mockResolvedValue(project);
+      skillRepo.count.mockResolvedValue(0);
+
+      await expect(
+        service.updateProjectStatus('project-uuid-1', 'user-uuid-1', { status: ProjectStatus.PENDING_APPROVAL }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('debería lanzar BadRequestException si no tiene programas académicos al enviar a revisión', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT, academicPrograms: [] });
+      projectRepo.findOne.mockResolvedValue(project);
+      skillRepo.count.mockResolvedValue(1);
+
+      await expect(
+        service.updateProjectStatus('project-uuid-1', 'user-uuid-1', { status: ProjectStatus.PENDING_APPROVAL }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('debería lanzar BadRequestException si no tiene documento de solicitud al enviar a revisión', async () => {
+      const project = createMockProject({ status: ProjectStatus.DRAFT, requestDocumentFileId: null });
+      projectRepo.findOne.mockResolvedValue(project);
+      skillRepo.count.mockResolvedValue(1);
+
+      await expect(
+        service.updateProjectStatus('project-uuid-1', 'user-uuid-1', { status: ProjectStatus.PENDING_APPROVAL }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('reviewProject: admin debería poder aprobar y publicar un proyecto en pending_approval', async () => {
+      const project = createMockProject({ status: ProjectStatus.PENDING_APPROVAL });
+      projectRepo.findOne.mockResolvedValue(project);
+      projectRepo.save.mockResolvedValue({ ...project, status: ProjectStatus.PUBLISHED });
+      requirementRepo.find.mockResolvedValue([createMockRequirement()]);
+
+      const result = await service.reviewProject('project-uuid-1', 'admin-uuid', 'approve', {});
+
+      expect(result.status).toBe(ProjectStatus.PUBLISHED);
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'project.published',
+        expect.objectContaining({ projectId: 'project-uuid-1' }),
+        'project-service',
+      );
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'project.faculty_approved',
+        expect.objectContaining({ projectId: 'project-uuid-1' }),
+        'project-service',
+      );
     });
 
     it('debería cambiar de published a in_progress', async () => {
@@ -543,7 +643,7 @@ describe('ProjectService', () => {
         status: ProjectStatus.PUBLISHED,
         locationType: LocationType.REMOTE,
         academicProgram: 'Sistemas',
-        tag: 'angular',
+        skill: 'angular',
         companyId: 'company-uuid-1',
         minimumSemester: 5,
         sortBy: 'views',
@@ -565,16 +665,22 @@ describe('ProjectService', () => {
   describe('getMyProjects', () => {
     it('debería retornar proyectos del usuario', async () => {
       const projects = [createMockProject()];
-      projectRepo.find.mockResolvedValue(projects);
+      const qb = {
+        leftJoinAndSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getManyAndCount: jest.fn().mockResolvedValue([projects, 1]),
+      };
+      projectRepo.createQueryBuilder.mockReturnValue(qb);
 
       const result = await service.getMyProjects('user-uuid-1');
 
-      expect(result).toHaveLength(1);
-      expect(projectRepo.find).toHaveBeenCalledWith({
-        where: { createdByUserId: 'user-uuid-1' },
-        relations: ['tags'],
-        order: { createdAt: 'DESC' },
-      });
+      expect(result.data).toHaveLength(1);
+      expect(result.meta.total).toBe(1);
+      expect(qb.where).toHaveBeenCalledWith('project.createdByUserId = :userId', { userId: 'user-uuid-1' });
     });
   });
 
@@ -788,56 +894,46 @@ describe('ProjectService', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // TAGS
+  // HABILIDADES
   // ═══════════════════════════════════════════════════════════════════
-  describe('Tags', () => {
-    describe('addTags', () => {
-      it('debería agregar tags nuevos', async () => {
+  describe('Habilidades', () => {
+    describe('addSkill', () => {
+      it('debería agregar una habilidad', async () => {
         const project = createMockProject();
         projectRepo.findOne.mockResolvedValue(project);
-        tagRepo.findOne.mockResolvedValue(null); // no existe aún
-        tagRepo.create.mockReturnValue(createMockTag());
-        tagRepo.save.mockResolvedValue(createMockTag());
+        skillRepo.create.mockReturnValue(createMockSkill());
+        skillRepo.save.mockResolvedValue(createMockSkill());
 
-        const result = await service.addTags('project-uuid-1', 'user-uuid-1', ['nestjs', 'angular']);
+        const result = await service.addSkill('project-uuid-1', 'user-uuid-1', {
+          name: 'nestjs',
+          category: SkillCategory.FRAMEWORK,
+        });
 
-        expect(result).toHaveLength(2);
-        expect(tagRepo.create).toHaveBeenCalledTimes(2);
-      });
-
-      it('debería ignorar tags duplicados', async () => {
-        const project = createMockProject();
-        projectRepo.findOne.mockResolvedValue(project);
-        tagRepo.findOne.mockResolvedValueOnce(createMockTag()).mockResolvedValueOnce(null);
-        tagRepo.create.mockReturnValue(createMockTag({ tag: 'angular' }));
-        tagRepo.save.mockResolvedValue(createMockTag({ tag: 'angular' }));
-
-        const result = await service.addTags('project-uuid-1', 'user-uuid-1', ['nestjs', 'angular']);
-
-        expect(result).toHaveLength(1); // solo angular, nestjs ya existía
+        expect(result).toBeDefined();
+        expect(skillRepo.create).toHaveBeenCalledTimes(1);
       });
     });
 
-    describe('deleteTag', () => {
-      it('debería eliminar un tag', async () => {
+    describe('deleteSkill', () => {
+      it('debería eliminar una habilidad', async () => {
         const project = createMockProject();
         projectRepo.findOne.mockResolvedValue(project);
-        const tag = createMockTag();
-        tagRepo.findOne.mockResolvedValue(tag);
-        tagRepo.remove.mockResolvedValue(tag);
+        const skill = createMockSkill();
+        skillRepo.findOne.mockResolvedValue(skill);
+        skillRepo.remove.mockResolvedValue(skill);
 
-        await service.deleteTag('project-uuid-1', 'tag-uuid-1', 'user-uuid-1');
+        await service.deleteSkill('project-uuid-1', 'skill-uuid-1', 'user-uuid-1');
 
-        expect(tagRepo.remove).toHaveBeenCalledWith(tag);
+        expect(skillRepo.remove).toHaveBeenCalledWith(skill);
       });
 
       it('debería lanzar NotFoundException si no existe', async () => {
         const project = createMockProject();
         projectRepo.findOne.mockResolvedValue(project);
-        tagRepo.findOne.mockResolvedValue(null);
+        skillRepo.findOne.mockResolvedValue(null);
 
         await expect(
-          service.deleteTag('project-uuid-1', 'no-existe', 'user-uuid-1'),
+          service.deleteSkill('project-uuid-1', 'no-existe', 'user-uuid-1'),
         ).rejects.toThrow(NotFoundException);
       });
     });

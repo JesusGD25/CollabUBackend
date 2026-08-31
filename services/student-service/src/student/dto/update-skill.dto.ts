@@ -20,7 +20,7 @@ export class UpdateSkillDto {
 
   @IsOptional()
   @IsEnum(SkillCategory, {
-    message: 'La categoría debe ser: technical, soft, language o tool',
+    message: 'La categoría debe ser: language, framework, tool, concept o soft_skill',
   })
   category?: SkillCategory;
 

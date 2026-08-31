@@ -36,9 +36,10 @@ export class ProjectResponseDto {
   applicationsCount: number;
   createdAt: Date;
   updatedAt: Date;
+  requestDocumentFileId?: string | null;
   requirements?: any[];
   deliverables?: any[];
-  tags?: any[];
+  skills?: any[];
   activities?: any[];
 }
 

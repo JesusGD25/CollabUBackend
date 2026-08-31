@@ -169,6 +169,18 @@ describe('GatewayAuthMiddleware', () => {
 
       expect(next).toHaveBeenCalled();
     });
+
+    it('debería permitir GET /api/v1/storage/files/:uuid/download sin token', async () => {
+      const req = createReq({
+        path: '/api/v1/storage/files/a1b2c3d4-e5f6-7890-abcd-ef1234567890/download',
+        method: 'GET',
+      });
+      const res = createRes();
+
+      await middleware.use(req, res, next);
+
+      expect(next).toHaveBeenCalled();
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════
@@ -185,7 +197,7 @@ describe('GatewayAuthMiddleware', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           statusCode: 401,
-          message: 'Token de autenticación requerido',
+          message: 'Token de autenticacion requerido',
         }),
       );
       expect(next).not.toHaveBeenCalled();
@@ -270,7 +282,7 @@ describe('GatewayAuthMiddleware', () => {
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
           statusCode: 401,
-          message: 'Token inválido o expirado',
+          message: 'Token invalido o expirado',
         }),
       );
       expect(next).not.toHaveBeenCalled();
