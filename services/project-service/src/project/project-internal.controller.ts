@@ -78,4 +78,20 @@ export class ProjectInternalController {
   async getProjectDeliverables(@Param('projectId', ParseUUIDPipe) projectId: string) {
     return this.projectService.getDeliverables(projectId);
   }
+
+  /**
+   * Autoriza el acceso al documento de solicitud de un proyecto.
+   *
+   * Storage Service delega aquí en cada descarga que no sea del propietario.
+   * El documento se sube antes de que exista ninguna aplicación, así que no
+   * puede resolverse por ese lado; se busca directamente por `requestDocumentFileId`.
+   */
+  @Post('files/can-access')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Verificar acceso al documento de solicitud de un proyecto (uso interno)' })
+  async canAccessFile(
+    @Body() body: { userId: string; userRole: string; fileId: string },
+  ): Promise<{ allowed: boolean; reason?: string }> {
+    return this.projectService.canAccessRequestDocument(body.fileId, body.userRole);
+  }
 }

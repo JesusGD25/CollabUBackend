@@ -9,7 +9,7 @@ import {
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import { Logger, UnauthorizedException, Inject, forwardRef } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
 import { ChatService } from './chat.service';
@@ -31,6 +31,7 @@ export class ChatGateway
   private readonly activeUsers = new Map<string, Set<string>>();
 
   constructor(
+    @Inject(forwardRef(() => ChatService))
     private readonly chatService: ChatService,
     private readonly jwtService: JwtService,
   ) {}
@@ -214,14 +215,14 @@ export class ChatGateway
       throw new WsException('Usuario no autenticado');
     }
 
-    // Persistir el mensaje usando el ChatService
-    const message = await this.chatService.sendMessage(userId, data.conversationId, {
+    // Persistir el mensaje. `ChatService.sendMessage` ya difunde por socket a
+    // la sala con el senderName correcto para receptores, así que NO volvemos
+    // a emitir aquí — un segundo emit produciría el mismo mensaje duplicado
+    // en el cliente (bug NG0955).
+    await this.chatService.sendMessage(userId, data.conversationId, {
       content: data.content,
       type: MessageType.TEXT,
     });
-
-    // Difundir el mensaje real guardado (con ID único, createdAt, etc.) a todos en la sala (incluido el emisor)
-    this.server.to(`conversation_${data.conversationId}`).emit('message', message);
   }
 }
 

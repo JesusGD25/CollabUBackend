@@ -19,6 +19,9 @@ export class GenerateReportDto {
       'student_outcomes',
       'skill_gap_analysis',
       'matching_effectiveness',
+      'academic_process_summary',
+      'supervisor_workload',
+      'project_completion_rates',
       'custom',
     ],
   })
@@ -28,6 +31,9 @@ export class GenerateReportDto {
     'student_outcomes',
     'skill_gap_analysis',
     'matching_effectiveness',
+    'academic_process_summary',
+    'supervisor_workload',
+    'project_completion_rates',
     'custom',
   ])
   reportType: string;

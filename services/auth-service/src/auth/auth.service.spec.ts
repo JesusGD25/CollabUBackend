@@ -227,25 +227,17 @@ describe('AuthService', () => {
       await expect(service.login(dto)).rejects.toThrow(UnauthorizedException);
     });
 
-    it('debería permitir login si el email no está verificado (temporal)', async () => {
+    it('debería rechazar login si el email no está verificado', async () => {
       const hashedPw = await bcrypt.hash('Password1!', 12);
       const user = createMockUser({
         isVerified: false,
         passwordHash: hashedPw,
       });
       userRepo.findOne.mockResolvedValue(user);
-      userRepo.save.mockResolvedValue(user);
-      refreshTokenRepo.create.mockReturnValue({} as RefreshToken);
-      refreshTokenRepo.save.mockResolvedValue({} as RefreshToken);
 
-      await expect(service.login(dto)).resolves.toEqual(
-        expect.objectContaining({
-          accessToken: 'mock-jwt-token',
-          user: expect.objectContaining({
-            id: user.id,
-            isVerified: false,
-          }),
-        }),
+      await expect(service.login(dto)).rejects.toThrow(UnauthorizedException);
+      await expect(service.login(dto)).rejects.toThrow(
+        'Debes verificar tu correo antes de iniciar sesión',
       );
     });
 

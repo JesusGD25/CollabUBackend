@@ -1,0 +1,39 @@
+# Dockerfile genérico multi-stage para los 14 microservicios NestJS del monorepo.
+# Build context: Backend/ (raíz, para poder copiar shared/ + services/<name>/)
+# Uso: docker build -f docker/Dockerfile.service --build-arg SERVICE_NAME=auth-service -t collabu/auth-service ..
+ARG NODE_VERSION=20-alpine
+
+FROM node:${NODE_VERSION} AS builder
+ARG SERVICE_NAME
+# python3/make/g++ requeridos para compilar el addon nativo de bcrypt en alpine (musl)
+RUN apk add --no-cache python3 make g++
+
+WORKDIR /repo/shared
+COPY shared/package*.json ./
+RUN npm install
+COPY shared/ ./
+RUN npm run build
+
+WORKDIR /repo/services/${SERVICE_NAME}
+COPY services/${SERVICE_NAME}/package*.json ./
+RUN npm install
+COPY services/${SERVICE_NAME}/ ./
+RUN npm run build
+RUN npm prune --omit=dev
+# npm crea node_modules/@collab-u/shared como symlink relativo (../../../../shared) que
+# apunta fuera de /app y no existe en el stage de producción. Se materializa como copia real.
+RUN rm -f node_modules/@collab-u/shared && cp -r /repo/shared node_modules/@collab-u/shared && rm -rf node_modules/@collab-u/shared/node_modules
+
+FROM node:${NODE_VERSION} AS production
+ARG SERVICE_NAME
+ARG SERVICE_PORT=3000
+ENV NODE_ENV=production
+ENV PORT=${SERVICE_PORT}
+WORKDIR /app
+COPY --from=builder /repo/services/${SERVICE_NAME}/dist ./dist
+COPY --from=builder /repo/services/${SERVICE_NAME}/node_modules ./node_modules
+COPY --from=builder /repo/services/${SERVICE_NAME}/package.json ./package.json
+EXPOSE ${SERVICE_PORT}
+HEALTHCHECK --interval=15s --timeout=5s --start-period=25s --retries=5 \
+  CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/docs',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"
+CMD ["node", "dist/main"]

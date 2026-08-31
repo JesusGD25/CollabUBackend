@@ -24,14 +24,16 @@ const mockProjectService = {
   addDeliverable: jest.fn(),
   updateDeliverable: jest.fn(),
   deleteDeliverable: jest.fn(),
-  addTags: jest.fn(),
-  deleteTag: jest.fn(),
+  getSkills: jest.fn(),
+  addSkill: jest.fn(),
+  updateSkill: jest.fn(),
+  deleteSkill: jest.fn(),
   getActivities: jest.fn(),
   createActivity: jest.fn(),
   updateActivity: jest.fn(),
 };
 
-const mockUser = { userId: 'user-uuid-1', email: 'test@test.com', role: 'company', companyId: 'company-uuid-1' };
+const mockUser = { id: 'user-uuid-1', userId: 'user-uuid-1', email: 'test@test.com', role: 'company', companyId: 'company-uuid-1' };
 
 // ─── Test Suite ─────────────────────────────────────────────────────
 
@@ -89,10 +91,10 @@ describe('ProjectController', () => {
         const expected = { data: [], meta: { total: 0, page: 1, limit: 20, totalPages: 0 } };
         mockProjectService.searchProjects.mockResolvedValue(expected);
 
-        const result = await controller.searchProjects(query as any);
+        const result = await controller.searchProjects(mockUser, query as any);
 
         expect(result).toEqual(expected);
-        expect(mockProjectService.searchProjects).toHaveBeenCalledWith(query);
+        expect(mockProjectService.searchProjects).toHaveBeenCalledWith(query, undefined);
       });
 
       it('debería buscar con filtros', async () => {
@@ -105,7 +107,7 @@ describe('ProjectController', () => {
         const expected = { data: [], meta: { total: 0, page: 1, limit: 10, totalPages: 0 } };
         mockProjectService.searchProjects.mockResolvedValue(expected);
 
-        const result = await controller.searchProjects(query as any);
+        const result = await controller.searchProjects(mockUser, query as any);
 
         expect(result).toEqual(expected);
       });
@@ -152,10 +154,10 @@ describe('ProjectController', () => {
         const expected = { id: 'project-uuid-1', title: 'Mi proyecto' };
         mockProjectService.getProjectById.mockResolvedValue(expected);
 
-        const result = await controller.getProject('project-uuid-1');
+        const result = await controller.getProject(mockUser, 'project-uuid-1');
 
         expect(result).toEqual(expected);
-        expect(mockProjectService.getProjectById).toHaveBeenCalledWith('project-uuid-1', true);
+        expect(mockProjectService.getProjectById).toHaveBeenCalledWith('project-uuid-1', true, mockUser.id, mockUser.role);
       });
     });
 
@@ -327,32 +329,32 @@ describe('ProjectController', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════
-  // TAGS ENDPOINTS
+  // SKILLS ENDPOINTS
   // ═══════════════════════════════════════════════════════════════════
-  describe('Tags', () => {
-    describe('POST /:projectId/tags', () => {
-      it('debería agregar tags', async () => {
-        const dto = { tags: ['nestjs', 'angular'] };
-        const expected = [{ id: 'tag-1', tag: 'nestjs' }, { id: 'tag-2', tag: 'angular' }];
-        mockProjectService.addTags.mockResolvedValue(expected);
+  describe('Skills', () => {
+    describe('POST /:projectId/skills', () => {
+      it('debería agregar una habilidad', async () => {
+        const dto = { name: 'nestjs', category: 'framework' as any };
+        const expected = { id: 'skill-1', name: 'nestjs' };
+        mockProjectService.addSkill.mockResolvedValue(expected);
 
-        const result = await controller.addTags('project-uuid-1', mockUser, dto);
+        const result = await controller.addSkill('project-uuid-1', mockUser, dto as any);
 
         expect(result).toEqual(expected);
-        expect(mockProjectService.addTags).toHaveBeenCalledWith(
-          'project-uuid-1', 'user-uuid-1', ['nestjs', 'angular'],
+        expect(mockProjectService.addSkill).toHaveBeenCalledWith(
+          'project-uuid-1', 'user-uuid-1', dto,
         );
       });
     });
 
-    describe('DELETE /:projectId/tags/:tagId', () => {
-      it('debería eliminar un tag', async () => {
-        mockProjectService.deleteTag.mockResolvedValue(undefined);
+    describe('DELETE /:projectId/skills/:skillId', () => {
+      it('debería eliminar una habilidad', async () => {
+        mockProjectService.deleteSkill.mockResolvedValue(undefined);
 
-        await controller.deleteTag('project-uuid-1', 'tag-1', mockUser);
+        await controller.deleteSkill('project-uuid-1', 'skill-1', mockUser);
 
-        expect(mockProjectService.deleteTag).toHaveBeenCalledWith(
-          'project-uuid-1', 'tag-1', 'user-uuid-1',
+        expect(mockProjectService.deleteSkill).toHaveBeenCalledWith(
+          'project-uuid-1', 'skill-1', 'user-uuid-1',
         );
       });
     });

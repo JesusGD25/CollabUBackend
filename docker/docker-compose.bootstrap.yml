@@ -1,0 +1,21 @@
+# docker-compose.bootstrap.yml — SOLO para la primera vez con un volumen de Postgres vacío.
+# 12 de 14 microservicios tienen `synchronize: NODE_ENV !== 'production'` en su
+# TypeORM config y el proyecto no tiene migraciones formales — con NODE_ENV=production
+# (docker-compose.prod.yml) nunca crean su esquema en una base nueva.
+# Este override fuerza NODE_ENV=development SOLO para que TypeORM sincronice el
+# esquema una vez. Úsalo, espera a que healthchecks pasen, y bájalo — luego levanta
+# normal con docker-compose.prod.yml (production real, sin este archivo).
+services:
+  auth-service: {environment: {NODE_ENV: development}}
+  user-service: {environment: {NODE_ENV: development}}
+  student-service: {environment: {NODE_ENV: development}}
+  company-service: {environment: {NODE_ENV: development}}
+  project-service: {environment: {NODE_ENV: development}}
+  application-service: {environment: {NODE_ENV: development}}
+  matching-service: {environment: {NODE_ENV: development}}
+  evaluation-service: {environment: {NODE_ENV: development}}
+  notification-service: {environment: {NODE_ENV: development}}
+  chat-service: {environment: {NODE_ENV: development}}
+  admin-service: {environment: {NODE_ENV: development}}
+  analytics-service: {environment: {NODE_ENV: development}}
+  storage-service: {environment: {NODE_ENV: development}}

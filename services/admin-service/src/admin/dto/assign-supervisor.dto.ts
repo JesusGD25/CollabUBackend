@@ -2,6 +2,7 @@ import {
   IsOptional,
   IsString,
   IsDateString,
+  IsArray,
   Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -11,10 +12,19 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 const UUID_FORMAT = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 export class AssignSupervisorDto {
-  @ApiProperty()
+  @ApiProperty({ description: 'ID del docente asesor (Supervisor.id)' })
   @IsString()
   @Matches(UUID_FORMAT, { message: 'supervisorId must be a UUID' })
   supervisorId: string;
+
+  @ApiPropertyOptional({
+    description: 'IDs de docentes jurado del anteproyecto (Supervisor.id) — se auto-aceptan, no pueden rechazar',
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @Matches(UUID_FORMAT, { each: true, message: 'cada juradoId debe ser un UUID' })
+  juradoIds?: string[];
 
   @ApiProperty()
   @IsString()

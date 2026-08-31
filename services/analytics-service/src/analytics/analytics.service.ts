@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { ProjectMetrics } from './entities/project-metrics.entity';
 import { StudentMetrics } from './entities/student-metrics.entity';
@@ -40,6 +40,7 @@ export class AnalyticsService {
     private readonly reportRepo: Repository<Report>,
 
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
   // ─── Dashboard ──────────────────────────────────────────────────────────────
@@ -445,6 +446,37 @@ export class AnalyticsService {
         };
       }
 
+      case 'academic_process_summary': {
+        const [assignmentStats, academicStats] = await this.getAcademicKpis();
+        return { assignmentStats, academicStats, generatedAt: new Date() };
+      }
+
+      case 'supervisor_workload': {
+        const [assignmentStats] = await this.getAcademicKpis();
+        return {
+          totalAssignments: assignmentStats?.totalAssignments ?? 0,
+          byRole: assignmentStats?.byRole ?? {},
+          avgAcceptanceHours: assignmentStats?.avgAcceptanceHours ?? null,
+          supervisorWorkload: assignmentStats?.supervisorWorkload ?? [],
+          generatedAt: new Date(),
+        };
+      }
+
+      case 'project_completion_rates': {
+        const [, academicStats] = await this.getAcademicKpis();
+        const total = academicStats?.totalRecords ?? 0;
+        const completed = academicStats?.completedCount ?? 0;
+        return {
+          totalRecords: total,
+          completedCount: completed,
+          completionRate: total > 0 ? Math.round((completed / total) * 10000) / 100 : null,
+          byStatus: academicStats?.byStatus ?? {},
+          avgDurationDays: academicStats?.avgDurationDays ?? null,
+          avgAnteproyectoCorrections: academicStats?.avgAnteproyectoCorrections ?? null,
+          generatedAt: new Date(),
+        };
+      }
+
       default:
         return {
           type: dto.reportType,
@@ -452,5 +484,36 @@ export class AnalyticsService {
           generatedAt: new Date(),
         };
     }
+  }
+
+  /** KPIs académicos consultados on-demand a admin-service y application-service (sin duplicar estado). */
+  async getAcademicKpis(): Promise<[
+    {
+      totalAssignments: number;
+      byRole: Record<string, number>;
+      byStatus: Record<string, number>;
+      avgAcceptanceHours: number | null;
+      supervisorWorkload: { supervisorId: string; activeCount: number }[];
+    } | null,
+    {
+      totalRecords: number;
+      byStatus: Record<string, number>;
+      completedCount: number;
+      avgDurationDays: number | null;
+      avgAnteproyectoCorrections: number | null;
+    } | null,
+  ]> {
+    const [assignmentStats, academicStats] = await Promise.all([
+      this.httpClient.get<any>('admin', '/internal/admin/assignments/stats').catch((err) => {
+        this.logger.warn(`No se pudieron obtener estadísticas de asignaciones: ${err.message}`);
+        return null;
+      }),
+      this.httpClient.get<any>('application', '/internal/applications/academic-records/stats').catch((err) => {
+        this.logger.warn(`No se pudieron obtener estadísticas de registros académicos: ${err.message}`);
+        return null;
+      }),
+    ]);
+
+    return [assignmentStats, academicStats];
   }
 }

@@ -4,6 +4,9 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Inject,
+  forwardRef,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In } from 'typeorm';
@@ -14,6 +17,7 @@ import { ConversationParticipant, ParticipantRole } from './entities/conversatio
 import { Message, MessageType } from './entities/message.entity';
 import { MessageAttachment } from './entities/message-attachment.entity';
 import { MessageReaction } from './entities/message-reaction.entity';
+import { ChatGateway } from './chat.gateway';
 
 import {
   CreateConversationDto,
@@ -51,6 +55,14 @@ export class ChatService {
     private readonly reactionRepo: Repository<MessageReaction>,
     private readonly eventPublisher: EventPublisher,
     private readonly httpClient: MicroserviceHttpClient,
+    /**
+     * ChatGateway se inyecta con forwardRef para romper el ciclo (gateway
+     * depende del service para persistir mensajes; service usa gateway para
+     * emitir por WebSocket cuando el mensaje llega por HTTP). @Optional
+     * evita romper tests unitarios sin gateway registrado.
+     */
+    @Optional() @Inject(forwardRef(() => ChatGateway))
+    private readonly gateway?: ChatGateway,
   ) {}
 
   // Helper para consultar los nombres y avatares reales de usuarios en batch
@@ -93,11 +105,32 @@ export class ChatService {
       if (existing) return this.getConversationById(existing.id, userId);
     }
 
+    // Para conversaciones de proyecto, existe UNA sola por (projectId, applicationId) —
+    // el workspace la abre cada vez que se entra a esa postulación específica. Si ya
+    // está creada, se devuelve; los nuevos participantes se agregan como MEMBER.
+    // Sin el filtro por applicationId, todos los candidatos de un mismo proyecto
+    // compartirían la misma conversación con la empresa (bug de privacidad).
+    if (type === ConversationType.PROJECT && dto.projectId) {
+      const existing = await this.conversationRepo.findOne({
+        where: {
+          type: ConversationType.PROJECT,
+          projectId: dto.projectId,
+          applicationId: dto.applicationId ?? IsNull(),
+          isActive: true,
+        },
+      });
+      if (existing) {
+        await this.ensureParticipants(existing.id, userId, dto.participantIds);
+        return this.getConversationById(existing.id, userId);
+      }
+    }
+
     const conversation = this.conversationRepo.create({
       type,
       name: dto.name,
       description: dto.description,
       projectId: dto.projectId,
+      applicationId: dto.applicationId,
       createdBy: userId,
       isActive: true,
     });
@@ -152,6 +185,13 @@ export class ChatService {
       }
     }
 
+    // Los adjuntos se cargan por consulta separada porque `mapMessage`
+    // recibe entidades que provienen de listas paginadas sin relations.
+    const attachments = await this.attachmentRepo.find({
+      where: { messageId: msg.id },
+      order: { createdAt: 'ASC' },
+    });
+
     return {
       id: msg.id,
       conversationId: msg.conversationId,
@@ -161,6 +201,14 @@ export class ChatService {
       messageType: msg.type,
       isRead: false,
       createdAt: msg.createdAt,
+      attachments: attachments.map((a) => ({
+        id: a.id,
+        fileUrl: a.fileUrl,
+        fileName: a.fileName,
+        fileSizeBytes: a.fileSizeBytes,
+        mimeType: a.mimeType,
+        thumbnailUrl: a.thumbnailUrl,
+      })),
     };
   }
 
@@ -341,19 +389,46 @@ export class ChatService {
   ): Promise<any> {
     await this.assertParticipant(conversationId, userId);
 
+    // Con adjuntos y sin texto, el tipo derivado por el DTO puede llegar como
+    // TEXT; se ajusta a FILE para que la UI renderice el bloque correcto.
+    const hasAttachments = !!dto.attachments && dto.attachments.length > 0;
+    const resolvedType = dto.type
+      ?? (hasAttachments ? MessageType.FILE : MessageType.TEXT);
+
     const message = this.messageRepo.create({
       conversationId,
       senderId: userId,
-      type: dto.type ?? MessageType.TEXT,
+      type: resolvedType,
       content: dto.content,
       replyToId: dto.replyToId ?? undefined,
     });
     await this.messageRepo.save(message);
 
-    // Actualizar last_message en conversación
+    if (hasAttachments) {
+      const rows = dto.attachments!.map((a) =>
+        this.attachmentRepo.create({
+          messageId: message.id,
+          fileUrl: a.fileUrl,
+          fileName: a.fileName,
+          fileSizeBytes: a.fileSizeBytes ?? null as any,
+          mimeType: a.mimeType ?? null as any,
+          thumbnailUrl: a.thumbnailUrl ?? null as any,
+        }),
+      );
+      await this.attachmentRepo.save(rows);
+    }
+
+    // El preview de la conversación cae al nombre del primer adjunto cuando
+    // el mensaje se envía sin texto — más legible que una cadena vacía.
+    const previewSource = dto.content?.trim()
+      ? dto.content
+      : hasAttachments
+        ? `📎 ${dto.attachments![0].fileName}`
+        : '';
+
     await this.conversationRepo.update(conversationId, {
       lastMessageAt: message.createdAt,
-      lastMessagePreview: dto.content?.substring(0, 255),
+      lastMessagePreview: previewSource.substring(0, 255),
     });
 
     // Incrementar unread_count para todos los participantes excepto el remitente
@@ -387,9 +462,27 @@ export class ChatService {
     );
 
     this.logger.log(`Mensaje ${message.id} enviado en conversación ${conversationId}`);
-    
+
     const profileMap = await this.fetchProfilesMap([userId]);
-    return this.mapMessage(message, userId, profileMap);
+    // Version "para el remitente" — senderName aparece como "Tú".
+    const mapped = await this.mapMessage(message, userId, profileMap);
+
+    // Difundir por WebSocket a la sala. IMPORTANTE: usamos una segunda
+    // versión donde senderName es el nombre real del remitente, no "Tú",
+    // porque el mismo payload lo reciben todos los participantes de la
+    // sala y el "Tú" solo tiene sentido para quien envía. El frontend
+    // suplanta el nombre por "Tú" cuando detecta que senderId es el suyo.
+    if (this.gateway?.server) {
+      const broadcast = {
+        ...mapped,
+        senderName: profileMap.get(userId)?.displayName ?? mapped.senderName,
+      };
+      this.gateway.server
+        .to(`conversation_${conversationId}`)
+        .emit('message', broadcast);
+    }
+
+    return mapped;
   }
 
   async getMessages(
@@ -610,6 +703,47 @@ export class ChatService {
     return this.conversationRepo.findOne({ where: { id: p1.conversationId } });
   }
 
+  /**
+   * Asegura que los userIds pasados sean participantes activos de la
+   * conversación. Idempotente: si ya existen, no hace nada; si no, crea
+   * la fila como MEMBER. Se usa al reutilizar conversaciones de proyecto
+   * cuando un rol nuevo (asesor, jurado) entra al workspace por primera vez.
+   */
+  private async ensureParticipants(
+    conversationId: string,
+    creatorId: string,
+    participantIds: string[],
+  ): Promise<void> {
+    const ids = Array.from(new Set([creatorId, ...participantIds])).filter(Boolean);
+    if (ids.length === 0) return;
+
+    const existing = await this.participantRepo.find({
+      where: { conversationId, userId: In(ids) },
+    });
+    const existingIds = new Set(existing.map((p) => p.userId));
+
+    // Reactivar los que estaban inactivos (por si salieron del proyecto)
+    const toReactivate = existing.filter((p) => !p.isActive);
+    for (const p of toReactivate) {
+      p.isActive = true;
+      await this.participantRepo.save(p);
+    }
+
+    const toCreate = ids
+      .filter((id) => !existingIds.has(id))
+      .map((id) =>
+        this.participantRepo.create({
+          conversationId,
+          userId: id,
+          role: id === creatorId ? ParticipantRole.OWNER : ParticipantRole.MEMBER,
+          isActive: true,
+        }),
+      );
+    if (toCreate.length > 0) {
+      await this.participantRepo.save(toCreate);
+    }
+  }
+
   async isParticipant(conversationId: string, userId: string): Promise<boolean> {
     const participant = await this.participantRepo.findOne({
       where: { conversationId, userId, isActive: true },
@@ -639,5 +773,30 @@ export class ChatService {
     return this.conversationRepo.find({
       where: { projectId, type: ConversationType.PROJECT, isActive: true },
     });
+  }
+
+  /** Uso interno (subscribers de eventos): evita crear canales duplicados por proyecto+nombre. */
+  async findConversationByProjectAndName(projectId: string, name: string): Promise<Conversation | null> {
+    return this.conversationRepo.findOne({ where: { projectId, name, isActive: true } });
+  }
+
+  /** Uso interno: cierra un canal grupal por completo (p. ej. asesor-jurado al desvincularse el jurado). */
+  async closeConversation(conversationId: string): Promise<void> {
+    await this.conversationRepo.update({ id: conversationId }, { isActive: false });
+  }
+
+  /** Uso interno: agrega un participante a un canal grupal existente (p. ej. nuevo jurado). */
+  async addParticipantIfMissing(conversationId: string, userId: string): Promise<void> {
+    const existing = await this.participantRepo.findOne({ where: { conversationId, userId } });
+    if (existing) {
+      if (!existing.isActive) {
+        existing.isActive = true;
+        await this.participantRepo.save(existing);
+      }
+      return;
+    }
+    await this.participantRepo.save(
+      this.participantRepo.create({ conversationId, userId, role: ParticipantRole.MEMBER }),
+    );
   }
 }

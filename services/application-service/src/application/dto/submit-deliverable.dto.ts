@@ -12,13 +12,25 @@ export class SubmitDeliverableDto {
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ description: 'URL del archivo subido en Storage Service' })
+  @ApiPropertyOptional({ description: 'URL pública del archivo subido en Storage Service' })
   @IsOptional()
   @IsString()
   fileUrl?: string;
 
+  /**
+   * UUID del archivo en Storage Service. Se persiste junto a `fileUrl` para
+   * permitir descarga segura (endpoint autenticado /storage/files/:id/download).
+   * El frontend lo obtiene tras `StorageService.upload()` y lo envía junto
+   * con `fileUrl`. Sin él, la descarga cae al enlace público que puede fallar
+   * si el archivo es privado.
+   */
+  @ApiPropertyOptional({ description: 'UUID del archivo en Storage Service' })
+  @IsOptional()
+  @IsUUID()
+  fileId?: string;
+
   @ApiPropertyOptional({ description: 'UUID del entregable del proyecto al que corresponde' })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID()
   projectDeliverableId?: string;
 }

@@ -35,15 +35,20 @@ export class ProxyMiddleware implements NestMiddleware {
               proxyReq.setHeader('x-user-role', req.headers['x-user-role']);
             }
 
-            // Re-serializar el body si ya fue parseado por Express y no es multipart/form-data
+            // Re-serializar el body si ya fue parseado por Express y no es multipart/form-data.
+            // Express ya consumió el stream original al parsear req.body, así que el pipe
+            // automático de http-proxy-middleware nunca emite 'end' y la request queda colgada
+            // para siempre — incluso con body vacío ({}) hay que escribir y cerrar explícitamente.
             const contentType = req.headers['content-type'] || '';
             const isMultipart = contentType.includes('multipart/form-data');
+            const methodsWithBody = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
-            if (req.body && Object.keys(req.body).length > 0 && !isMultipart) {
+            if (req.body !== undefined && !isMultipart && methodsWithBody.includes(req.method)) {
               const bodyData = JSON.stringify(req.body);
               proxyReq.setHeader('Content-Type', 'application/json');
               proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
               proxyReq.write(bodyData);
+              proxyReq.end();
             }
           },
           proxyRes: (proxyRes, req: any) => {

@@ -9,12 +9,16 @@ import {
   MinLength,
   IsNumber,
   IsArray,
+  IsUUID,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import {
   ProjectType,
   LocationType,
   CompensationType,
 } from '../entities/project.entity';
+import { CreateProjectSkillDto } from './create-project-skill.dto';
 
 export class CreateProjectDto {
   @IsString()
@@ -74,6 +78,10 @@ export class CreateProjectDto {
   compensationAmount?: number;
 
   @IsOptional()
+  @IsString()
+  currency?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   positionsAvailable?: number;
@@ -84,7 +92,7 @@ export class CreateProjectDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
+  @IsUUID('4', { each: true })
   academicPrograms?: string[];
 
   @IsOptional()
@@ -95,6 +103,11 @@ export class CreateProjectDto {
 
   @IsOptional()
   @IsArray()
-  @IsString({ each: true })
-  tags?: string[];
+  @ValidateNested({ each: true })
+  @Type(() => CreateProjectSkillDto)
+  skills?: CreateProjectSkillDto[];
+
+  @IsOptional()
+  @IsUUID()
+  requestDocumentFileId?: string;
 }

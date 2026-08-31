@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { AnalyticsService } from './analytics.service';
 import { ProjectMetrics } from './entities/project-metrics.entity';
@@ -22,6 +22,7 @@ const repoMock = () => ({
 });
 
 const mockEventPublisher = { publish: jest.fn().mockResolvedValue(undefined) };
+const mockHttpClient = { get: jest.fn(), post: jest.fn(), patch: jest.fn() };
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -127,6 +128,7 @@ describe('AnalyticsService', () => {
         { provide: getRepositoryToken(SkillTrend),      useValue: skillTrendRepo },
         { provide: getRepositoryToken(Report),          useValue: reportRepo },
         { provide: EventPublisher,                      useValue: mockEventPublisher },
+        { provide: MicroserviceHttpClient,               useValue: mockHttpClient },
       ],
     }).compile();
 
@@ -138,7 +140,7 @@ describe('AnalyticsService', () => {
 
   describe('getDashboard', () => {
     it('should return dashboard with platform metrics, top skills and recent reports', async () => {
-      platformMetricsRepo.findOne.mockResolvedValue(mockPlatformMetrics);
+      platformMetricsRepo.find.mockResolvedValue([mockPlatformMetrics]);
       skillTrendRepo.find.mockResolvedValue([mockSkillTrend]);
       reportRepo.find.mockResolvedValue([mockReport]);
 
@@ -153,7 +155,7 @@ describe('AnalyticsService', () => {
     });
 
     it('should return zeros when no platform metrics exist', async () => {
-      platformMetricsRepo.findOne.mockResolvedValue(null);
+      platformMetricsRepo.find.mockResolvedValue([]);
       skillTrendRepo.find.mockResolvedValue([]);
       reportRepo.find.mockResolvedValue([]);
 
@@ -469,6 +471,63 @@ describe('AnalyticsService', () => {
       reportRepo.findOne.mockResolvedValue(null);
 
       await expect(service.getReport('nonexistent')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getAcademicKpis', () => {
+    it('should return stats from admin and application services', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce({ totalAssignments: 5, byRole: { asesor: 3 }, byStatus: {}, avgAcceptanceHours: 2.5, supervisorWorkload: [] })
+        .mockResolvedValueOnce({ totalRecords: 4, byStatus: {}, completedCount: 2, avgDurationDays: 30, avgAnteproyectoCorrections: 1 });
+
+      const [assignmentStats, academicStats] = await service.getAcademicKpis();
+
+      expect(assignmentStats?.totalAssignments).toBe(5);
+      expect(academicStats?.completedCount).toBe(2);
+    });
+
+    it('should return null for a source that fails without throwing', async () => {
+      mockHttpClient.get
+        .mockRejectedValueOnce(new Error('down'))
+        .mockResolvedValueOnce({ totalRecords: 0, byStatus: {}, completedCount: 0, avgDurationDays: null, avgAnteproyectoCorrections: null });
+
+      const [assignmentStats, academicStats] = await service.getAcademicKpis();
+
+      expect(assignmentStats).toBeNull();
+      expect(academicStats?.totalRecords).toBe(0);
+    });
+  });
+
+  describe('generateReport - academic report types', () => {
+    beforeEach(() => {
+      reportRepo.create.mockImplementation((v: any) => v);
+      reportRepo.save.mockImplementation((v: any) => Promise.resolve({ id: 'report-x', ...v }));
+    });
+
+    it('project_completion_rates computes completionRate percentage', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce({ totalAssignments: 0, byRole: {}, byStatus: {}, avgAcceptanceHours: null, supervisorWorkload: [] })
+        .mockResolvedValueOnce({ totalRecords: 4, byStatus: { completed: 2, active: 2 }, completedCount: 2, avgDurationDays: 20, avgAnteproyectoCorrections: 0.5 });
+
+      const report = await service.generateReport(userId, {
+        name: 'Completitud', reportType: 'project_completion_rates',
+      } as any);
+
+      expect(report.data.completionRate).toBe(50);
+      expect(report.data.totalRecords).toBe(4);
+    });
+
+    it('supervisor_workload returns assignment stats', async () => {
+      mockHttpClient.get
+        .mockResolvedValueOnce({ totalAssignments: 7, byRole: { asesor: 4 }, byStatus: {}, avgAcceptanceHours: 3, supervisorWorkload: [{ supervisorId: 's1', activeCount: 2 }] })
+        .mockResolvedValueOnce({ totalRecords: 0, byStatus: {}, completedCount: 0, avgDurationDays: null, avgAnteproyectoCorrections: null });
+
+      const report = await service.generateReport(userId, {
+        name: 'Carga docente', reportType: 'supervisor_workload',
+      } as any);
+
+      expect(report.data.totalAssignments).toBe(7);
+      expect(report.data.supervisorWorkload).toEqual([{ supervisorId: 's1', activeCount: 2 }]);
     });
   });
 });

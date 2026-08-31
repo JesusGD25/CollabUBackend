@@ -39,6 +39,14 @@ export class StudentProfile {
   @Column({ type: 'varchar', length: 150 })
   program: string;
 
+  /**
+   * FK lógica (cross-service) a admin_service.academic_programs.id — nullable durante la
+   * transición desde `program` (texto libre). Se resuelve por backfill o al editar el perfil.
+   * `program` se conserva por compatibilidad hasta que todos los consumidores migren.
+   */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
+
   @Column({ type: 'varchar', length: 150, default: 'Facultad de Ingeniería' })
   faculty: string;
 

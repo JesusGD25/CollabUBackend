@@ -71,7 +71,7 @@ describe('StorageController', () => {
       const result = await controller.getFileInfo(user, 'file-1');
 
       expect(result).toEqual(expected);
-      expect(service.getFileInfo).toHaveBeenCalledWith('file-1', 'user-uuid-1');
+      expect(service.getFileInfo).toHaveBeenCalledWith('file-1', 'user-uuid-1', null);
     });
   });
 

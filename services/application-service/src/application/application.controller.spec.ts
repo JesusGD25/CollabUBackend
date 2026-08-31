@@ -1,16 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { ApplicationController } from './application.controller';
 import { ApplicationService } from './application.service';
 import { ApplicationStatus } from './entities/application.entity';
 import { InterviewType } from './entities/interview.entity';
-import { DeliverableStatus } from './entities/student-deliverable.entity';
+import { DeliverableStatus, RequesterType } from './entities/student-deliverable.entity';
 
 // ─── Mock del servicio ────────────────────────────────────────────────────────
 
 const mockApplicationService = {
+  authorize: jest.fn(),
+  getProjectContext: jest.fn(),
   createApplication: jest.fn(),
   getMyApplications: jest.fn(),
   findApplicationById: jest.fn(),
+  findApplicationForViewer: jest.fn(),
   getApplicationTimeline: jest.fn(),
   getProjectApplications: jest.fn(),
   updateStatus: jest.fn(),
@@ -20,14 +24,24 @@ const mockApplicationService = {
   completeInterview: jest.fn(),
   cancelInterview: jest.fn(),
   rescheduleInterview: jest.fn(),
+  setInterviewBrief: jest.fn(),
+  setInterviewSolution: jest.fn(),
+  updateNotes: jest.fn(),
   submitDeliverable: jest.fn(),
   updateDeliverable: jest.fn(),
   getDeliverables: jest.fn(),
   reviewDeliverable: jest.fn(),
+  createDeliverable: jest.fn(),
 };
 
 const mockUser = { id: 'user-uuid-1', role: 'student' };
 const mockCompanyUser = { id: 'company-uuid-1', role: 'company' };
+
+/** Respuesta por defecto de `authorize`: participante con todos los permisos. */
+const viewerResult = (contextRole: string, permissions: string[] = ['view_private_notes']) => ({
+  application: { id: 'app-uuid-1' },
+  viewer: { userId: 'user-uuid-1', contextRole, permissions, assignments: [] },
+});
 
 // ─── Test Suite ──────────────────────────────────────────────────────────────
 
@@ -43,6 +57,7 @@ describe('ApplicationController', () => {
     }).compile();
 
     controller = module.get<ApplicationController>(ApplicationController);
+    mockApplicationService.authorize.mockResolvedValue(viewerResult('company'));
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -81,24 +96,54 @@ describe('ApplicationController', () => {
   });
 
   describe('findOne', () => {
-    it('debería delegar a applicationService.findApplicationById', async () => {
+    it('debería delegar a applicationService.findApplicationForViewer', async () => {
       const expected = { id: 'app-uuid-1' };
-      mockApplicationService.findApplicationById.mockResolvedValue(expected);
+      mockApplicationService.findApplicationForViewer.mockResolvedValue(expected);
 
-      const result = await controller.findOne('app-uuid-1');
-      expect(mockApplicationService.findApplicationById).toHaveBeenCalledWith('app-uuid-1');
+      const result = await controller.findOne(mockUser, 'app-uuid-1');
+      expect(mockApplicationService.findApplicationForViewer).toHaveBeenCalledWith(
+        'app-uuid-1',
+        mockUser,
+      );
+      expect(result).toEqual(expected);
+    });
+  });
+
+  describe('getContext', () => {
+    it('debería delegar a applicationService.getProjectContext', async () => {
+      const expected = { viewer: { contextRole: 'student' } };
+      mockApplicationService.getProjectContext.mockResolvedValue(expected);
+
+      const result = await controller.getContext(mockUser, 'app-uuid-1');
+      expect(mockApplicationService.getProjectContext).toHaveBeenCalledWith('app-uuid-1', mockUser);
       expect(result).toEqual(expected);
     });
   });
 
   describe('getTimeline', () => {
-    it('debería delegar a applicationService.getApplicationTimeline', async () => {
+    it('debería autorizar antes de devolver el historial', async () => {
       const expected = [{ id: 'timeline-uuid-1' }];
       mockApplicationService.getApplicationTimeline.mockResolvedValue(expected);
 
-      const result = await controller.getTimeline('app-uuid-1');
+      const result = await controller.getTimeline(mockUser, 'app-uuid-1');
+      expect(mockApplicationService.authorize).toHaveBeenCalledWith(
+        'app-uuid-1',
+        mockUser,
+        'view_activity',
+      );
       expect(mockApplicationService.getApplicationTimeline).toHaveBeenCalledWith('app-uuid-1');
       expect(result).toEqual(expected);
+    });
+
+    it('debería propagar el 403 cuando el usuario no participa en el proyecto', async () => {
+      mockApplicationService.authorize.mockRejectedValueOnce(
+        new ForbiddenException('No tienes acceso a esta postulación'),
+      );
+
+      await expect(controller.getTimeline(mockUser, 'app-uuid-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(mockApplicationService.getApplicationTimeline).not.toHaveBeenCalled();
     });
   });
 
@@ -182,8 +227,16 @@ describe('ApplicationController', () => {
       const expected = [{ id: 'interview-uuid-1' }];
       mockApplicationService.getInterviews.mockResolvedValue(expected);
 
-      const result = await controller.getInterviews('app-uuid-1');
-      expect(mockApplicationService.getInterviews).toHaveBeenCalledWith('app-uuid-1');
+      const result = await controller.getInterviews(mockCompanyUser, 'app-uuid-1');
+      expect(mockApplicationService.getInterviews).toHaveBeenCalledWith('app-uuid-1', false);
+    });
+
+    it('debería sanear las notas privadas para quien no es la empresa', async () => {
+      mockApplicationService.authorize.mockResolvedValueOnce(viewerResult('student', ['view_project']));
+      mockApplicationService.getInterviews.mockResolvedValue([]);
+
+      await controller.getInterviews(mockUser, 'app-uuid-1');
+      expect(mockApplicationService.getInterviews).toHaveBeenCalledWith('app-uuid-1', true);
     });
   });
 
@@ -263,6 +316,7 @@ describe('ApplicationController', () => {
         mockCompanyUser.id,
         DeliverableStatus.APPROVED,
         dto,
+        expect.any(String),
       );
     });
   });
@@ -284,6 +338,7 @@ describe('ApplicationController', () => {
         mockCompanyUser.id,
         DeliverableStatus.REJECTED,
         dto,
+        expect.any(String),
       );
     });
   });
@@ -305,7 +360,44 @@ describe('ApplicationController', () => {
         mockCompanyUser.id,
         DeliverableStatus.NEEDS_REVISION,
         dto,
+        expect.any(String),
       );
+    });
+  });
+
+  describe('createDeliverable', () => {
+    it('debería marcar requesterType=asesor cuando el rol contextual es asesor', async () => {
+      mockApplicationService.authorize.mockResolvedValueOnce(
+        viewerResult('asesor', ['create_deliverable']),
+      );
+      mockApplicationService.createDeliverable.mockResolvedValue({ id: 'deliverable-uuid-1' });
+
+      await controller.createDeliverable(
+        { id: 'faculty-uuid-1', role: 'faculty' },
+        'app-uuid-1',
+        { title: 'Informe parcial' } as any,
+      );
+      expect(mockApplicationService.createDeliverable).toHaveBeenCalledWith(
+        'app-uuid-1',
+        'faculty-uuid-1',
+        { title: 'Informe parcial' },
+        RequesterType.ASESOR,
+      );
+    });
+
+    it('debería rechazar al jurado, que carece del permiso create_deliverable', async () => {
+      mockApplicationService.authorize.mockRejectedValueOnce(
+        new ForbiddenException('Tu rol en este proyecto (jurado_anteproyecto) no permite esta acción'),
+      );
+
+      await expect(
+        controller.createDeliverable(
+          { id: 'faculty-uuid-2', role: 'faculty' },
+          'app-uuid-1',
+          { title: 'Informe' } as any,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockApplicationService.createDeliverable).not.toHaveBeenCalled();
     });
   });
 });

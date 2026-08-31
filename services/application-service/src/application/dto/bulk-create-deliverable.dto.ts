@@ -31,6 +31,6 @@ export class BulkCreateDeliverableDto {
 
   @ApiPropertyOptional({ description: 'UUID del project_deliverable (plantilla)' })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID()
   projectDeliverableId?: string;
 }

@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import { MatchingController } from './matching.controller';
 import { MatchingService } from './matching.service';
 import { MatchFactor, CompatibilityLevel, FeedbackType, TargetType } from './entities/enums';
@@ -66,13 +67,29 @@ describe('MatchingController', () => {
   });
 
   describe('calculate', () => {
-    it('debería delegar a matchingService.calculateAndStore', async () => {
+    it('debería delegar a matchingService.calculateAndStore (admin, cualquier studentId)', async () => {
       const dto = { studentId: 'student-1', projectId: 'project-1' };
       const expected = { id: 'result-1', overallScore: 75 } as MatchResult;
       mockMatchingService.calculateAndStore.mockResolvedValue(expected);
-      const result = await controller.calculate(dto);
+      const result = await controller.calculate(dto, { userId: 'admin-1', role: 'admin' });
       expect(mockMatchingService.calculateAndStore).toHaveBeenCalledWith('student-1', 'project-1');
       expect(result).toBe(expected);
+    });
+
+    it('debería permitir a un estudiante calcular su propio matching', async () => {
+      const dto = { studentId: 'student-1', projectId: 'project-1' };
+      const expected = { id: 'result-1', overallScore: 75 } as MatchResult;
+      mockMatchingService.calculateAndStore.mockResolvedValue(expected);
+      const result = await controller.calculate(dto, { userId: 'student-1', role: 'student' });
+      expect(result).toBe(expected);
+    });
+
+    it('debería rechazar si un estudiante intenta calcular el matching de otro', async () => {
+      const dto = { studentId: 'student-1', projectId: 'project-1' };
+      await expect(
+        controller.calculate(dto, { userId: 'student-2', role: 'student' }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockMatchingService.calculateAndStore).not.toHaveBeenCalled();
     });
   });
 

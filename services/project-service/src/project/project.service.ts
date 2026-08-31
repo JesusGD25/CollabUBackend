@@ -12,7 +12,7 @@ import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 import { Project, ProjectStatus } from './entities/project.entity';
 import { ProjectRequirement } from './entities/project-requirement.entity';
 import { ProjectDeliverable } from './entities/project-deliverable.entity';
-import { ProjectTag } from './entities/project-tag.entity';
+import { ProjectSkill } from './entities/project-skill.entity';
 import { ProjectActivity } from './entities/project-activity.entity';
 
 import {
@@ -24,6 +24,8 @@ import {
   ProjectSearchQueryDto,
   CreateActivityDto,
   UpdateActivityDto,
+  CreateProjectSkillDto,
+  UpdateProjectSkillDto,
 } from './dto';
 
 export interface PaginatedProjectsResponse {
@@ -39,7 +41,8 @@ export interface PaginatedProjectsResponse {
 // Transiciones de estado válidas
 const VALID_TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
   [ProjectStatus.DRAFT]: [ProjectStatus.PENDING_APPROVAL, ProjectStatus.CANCELLED],
-  [ProjectStatus.PENDING_APPROVAL]: [ProjectStatus.PUBLISHED, ProjectStatus.DRAFT],
+  [ProjectStatus.NEEDS_CHANGES]: [ProjectStatus.PENDING_APPROVAL, ProjectStatus.CANCELLED],
+  [ProjectStatus.PENDING_APPROVAL]: [ProjectStatus.PUBLISHED, ProjectStatus.NEEDS_CHANGES, ProjectStatus.DRAFT],
   [ProjectStatus.PUBLISHED]: [ProjectStatus.IN_PROGRESS, ProjectStatus.CANCELLED],
   [ProjectStatus.IN_PROGRESS]: [ProjectStatus.COMPLETED, ProjectStatus.CANCELLED],
   [ProjectStatus.COMPLETED]: [],
@@ -54,22 +57,46 @@ export class ProjectService {
     @InjectRepository(Project) private projectRepo: Repository<Project>,
     @InjectRepository(ProjectRequirement) private requirementRepo: Repository<ProjectRequirement>,
     @InjectRepository(ProjectDeliverable) private deliverableRepo: Repository<ProjectDeliverable>,
-    @InjectRepository(ProjectTag) private tagRepo: Repository<ProjectTag>,
+    @InjectRepository(ProjectSkill) private skillRepo: Repository<ProjectSkill>,
     @InjectRepository(ProjectActivity) private activityRepo: Repository<ProjectActivity>,
     private readonly eventPublisher: EventPublisher,
     private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
-  /**
-   * Formatea un proyecto para la respuesta de la API, 
-   * convirtiendo la relación de tags en un array de strings.
-   */
   private formatProject(project: Project): any {
     if (!project) return null;
     return {
       ...project,
-      tags: project.tags?.map((t: any) => (typeof t === 'string' ? t : t.tag)) || [],
+      skills: project.skills || [],
     };
+  }
+
+  /** Resuelve nombres de habilidad contra el catálogo maestro (admin-service) por nombre normalizado. */
+  private async resolveCatalogSkillIds(names: string[]): Promise<Map<string, string | null>> {
+    if (!names.length) return new Map();
+    try {
+      const results = await this.httpClient.post<{ name: string; skillId: string | null }[]>(
+        'admin',
+        '/internal/admin/skills/by-names',
+        { names },
+      );
+      return new Map(results.map((r) => [r.name, r.skillId]));
+    } catch (err) {
+      this.logger.warn(`No se pudo resolver catálogo de habilidades: ${err.message}`);
+      return new Map();
+    }
+  }
+
+  private async buildSkillEntities(projectId: string, dtos: CreateProjectSkillDto[]): Promise<ProjectSkill[]> {
+    const namesToResolve = dtos.filter((d) => !d.catalogSkillId).map((d) => d.name);
+    const resolved = await this.resolveCatalogSkillIds(namesToResolve);
+    return dtos.map((dto) =>
+      this.skillRepo.create({
+        ...dto,
+        catalogSkillId: dto.catalogSkillId ?? resolved.get(dto.name) ?? null,
+        projectId,
+      }),
+    );
   }
 
   // ── PROYECTOS ──
@@ -119,20 +146,20 @@ export class ProjectService {
       location: dto.location,
       compensationType: dto.compensationType,
       compensationAmount: dto.compensationAmount,
+      currency: dto.currency,
       positionsAvailable: dto.positionsAvailable,
       applicationDeadline: dto.applicationDeadline ? new Date(dto.applicationDeadline) : undefined,
       academicPrograms: dto.academicPrograms,
       minimumSemester: dto.minimumSemester,
+      requestDocumentFileId: dto.requestDocumentFileId ?? null,
     });
 
     const saved = await this.projectRepo.save(project);
 
-    // Crear tags si se proporcionaron
-    if (dto.tags && dto.tags.length > 0) {
-      const tags = dto.tags.map((tag) =>
-        this.tagRepo.create({ projectId: saved.id, tag: tag.toLowerCase().trim() }),
-      );
-      await this.tagRepo.save(tags);
+    // Crear habilidades requeridas si se proporcionaron
+    if (dto.skills && dto.skills.length > 0) {
+      const skills = await this.buildSkillEntities(saved.id, dto.skills);
+      await this.skillRepo.save(skills);
     }
 
     await this.eventPublisher.publish(
@@ -182,15 +209,48 @@ export class ProjectService {
     }
   }
 
-  async getProjectById(projectId: string, incrementViews = false): Promise<any> {
-    const project = await this.getProjectEntityById(projectId, incrementViews);
+  /** Estados visibles públicamente (sin autenticación) */
+  private static readonly PUBLIC_STATUSES = [
+    ProjectStatus.PUBLISHED,
+    ProjectStatus.IN_PROGRESS,
+    ProjectStatus.COMPLETED,
+  ];
+
+  async getProjectById(
+    projectId: string,
+    incrementViews = false,
+    viewerId?: string,
+    viewerRole?: string,
+  ): Promise<any> {
+    const project = await this.getProjectEntityById(projectId, false);
+
+    const isPublic = ProjectService.PUBLIC_STATUSES.includes(project.status);
+    const isOwner = !!viewerId && project.createdByUserId === viewerId;
+    const isAdmin = viewerRole === 'admin';
+
+    if (!isPublic && !isOwner && !isAdmin) {
+      // No revelar existencia de proyectos no publicados a quien no es dueño/admin
+      throw new NotFoundException('Proyecto no encontrado');
+    }
+
+    if (incrementViews && isPublic) {
+      project.viewsCount += 1;
+      await this.projectRepo.save(project);
+
+      this.eventPublisher.publish(
+        'project.viewed',
+        { projectId, viewsCount: project.viewsCount },
+        'project-service',
+      ).catch((err) => this.logger.warn(`Error publicando project.viewed: ${err.message}`));
+    }
+
     return this.formatProject(project);
   }
 
   private async getProjectEntityById(projectId: string, incrementViews = false): Promise<Project> {
     const project = await this.projectRepo.findOne({
       where: { id: projectId },
-      relations: ['requirements', 'deliverables', 'tags', 'activities'],
+      relations: ['requirements', 'deliverables', 'skills', 'activities'],
     });
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado');
@@ -213,7 +273,7 @@ export class ProjectService {
   async getProjectBySlug(slug: string): Promise<any> {
     const project = await this.projectRepo.findOne({
       where: { slug },
-      relations: ['requirements', 'deliverables', 'tags'],
+      relations: ['requirements', 'deliverables', 'skills'],
     });
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado');
@@ -225,8 +285,23 @@ export class ProjectService {
     const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
-    if (project.status !== ProjectStatus.DRAFT && project.status !== ProjectStatus.PUBLISHED) {
-      throw new BadRequestException('Solo se pueden editar proyectos en estado draft o published');
+    const EDITABLE_STATUSES = [ProjectStatus.DRAFT, ProjectStatus.PUBLISHED, ProjectStatus.NEEDS_CHANGES];
+    if (!EDITABLE_STATUSES.includes(project.status)) {
+      throw new BadRequestException('Solo se pueden editar proyectos en estado draft, published o needs_changes');
+    }
+
+    // El documento de solicitud es la base de la revisión institucional: una vez
+    // publicado/aprobado no puede cambiarse por debajo del proceso de revisión.
+    // Solo se puede reemplazar mientras la empresa aún está preparando el proyecto
+    // (draft) o corrigiéndolo a pedido de Facultad (needs_changes).
+    if (
+      dto.requestDocumentFileId !== undefined &&
+      dto.requestDocumentFileId !== project.requestDocumentFileId &&
+      project.status === ProjectStatus.PUBLISHED
+    ) {
+      throw new BadRequestException(
+        'El documento de solicitud solo puede reemplazarse cuando el proyecto está en borrador o requiere cambios',
+      );
     }
 
     this.validateDates(
@@ -240,18 +315,16 @@ export class ProjectService {
       dto.totalHours !== undefined ? dto.totalHours : project.totalHours,
     );
 
-    // Procesar tags separadamente
-    if (dto.tags !== undefined) {
-      await this.tagRepo.delete({ projectId });
-      if (dto.tags.length > 0) {
-        const tags = dto.tags.map((tag) =>
-          this.tagRepo.create({ projectId, tag: tag.toLowerCase().trim() }),
-        );
-        await this.tagRepo.save(tags);
+    // Procesar habilidades separadamente
+    if (dto.skills !== undefined) {
+      await this.skillRepo.delete({ projectId });
+      if (dto.skills.length > 0) {
+        const skills = await this.buildSkillEntities(projectId, dto.skills);
+        await this.skillRepo.save(skills);
       }
-      delete dto.tags;
-      // Prevenir que typeorm intente actualizar tags eliminados
-      delete (project as any).tags;
+      delete dto.skills;
+      // Prevenir que typeorm intente actualizar skills eliminados
+      delete (project as any).skills;
     }
 
     // Prevenir problemas similares con otras relaciones
@@ -280,6 +353,14 @@ export class ProjectService {
     const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
+    // La empresa NUNCA puede saltarse la revisión institucional: publicar o marcar
+    // "needs_changes" es exclusivo del flujo admin (`reviewProject`).
+    if (dto.status === ProjectStatus.PUBLISHED || dto.status === ProjectStatus.NEEDS_CHANGES) {
+      throw new BadRequestException(
+        'Este cambio de estado solo puede realizarlo la Facultad mediante el proceso de revisión',
+      );
+    }
+
     const validTransitions = VALID_TRANSITIONS[project.status];
     if (!validTransitions.includes(dto.status)) {
       throw new BadRequestException(
@@ -287,18 +368,33 @@ export class ProjectService {
       );
     }
 
-    // Validar que tenga al menos 1 requirement antes de publicar
-    if (dto.status === ProjectStatus.PUBLISHED) {
-      const requirements = await this.requirementRepo.find({ where: { projectId } });
-      if (requirements.length === 0) {
+    // Validar completitud mínima antes de enviar a revisión
+    if (dto.status === ProjectStatus.PENDING_APPROVAL) {
+      const skillsCount = await this.skillRepo.count({ where: { projectId } });
+      if (skillsCount === 0) {
         throw new BadRequestException(
-          'El proyecto debe tener al menos un requisito antes de ser publicado',
+          'El proyecto debe tener al menos una habilidad requerida antes de enviarse a revisión',
+        );
+      }
+      if (!project.academicPrograms || project.academicPrograms.length === 0) {
+        throw new BadRequestException(
+          'El proyecto debe tener al menos un programa académico antes de enviarse a revisión',
+        );
+      }
+      if (!project.requestDocumentFileId) {
+        throw new BadRequestException(
+          'El proyecto debe tener adjunto el documento de solicitud formal antes de enviarse a revisión',
         );
       }
     }
 
     const previousStatus = project.status;
     project.status = dto.status;
+
+    if (dto.status === ProjectStatus.PENDING_APPROVAL) {
+      project.submittedForReviewAt = new Date();
+    }
+
     await this.projectRepo.save(project);
 
     await this.eventPublisher.publish(
@@ -312,20 +408,14 @@ export class ProjectService {
       'project-service',
     );
 
-    // Publicar evento especial cuando se publica (para trigger batch matching)
-    if (dto.status === ProjectStatus.PUBLISHED) {
-      const requirements = await this.requirementRepo.find({ where: { projectId } });
+    if (dto.status === ProjectStatus.PENDING_APPROVAL) {
       await this.eventPublisher.publish(
-        'project.published',
+        'project.submitted_for_review',
         {
           projectId,
           companyId: project.companyId,
           title: project.title,
-          requirements: requirements.map((r) => ({
-            type: r.requirementType,
-            name: r.name,
-            isMandatory: r.isMandatory,
-          })),
+          submittedAt: project.submittedForReviewAt,
         },
         'project-service',
       );
@@ -354,7 +444,7 @@ export class ProjectService {
 
   async searchProjects(query: ProjectSearchQueryDto, studentId?: string): Promise<PaginatedProjectsResponse> {
     const qb = this.projectRepo.createQueryBuilder('project');
-    qb.leftJoinAndSelect('project.tags', 'tag');
+    qb.leftJoinAndSelect('project.skills', 'skill');
     qb.leftJoinAndSelect('project.requirements', 'req');
     qb.where('project.isActive = :active', { active: true });
 
@@ -401,8 +491,8 @@ export class ProjectService {
       });
     }
 
-    if (query.tag) {
-      qb.andWhere('tag.tag = :tag', { tag: query.tag.toLowerCase() });
+    if (query.skill) {
+      qb.andWhere('skill.name = :skill', { skill: query.skill.toLowerCase() });
     }
 
     if (query.companyId) {
@@ -446,7 +536,7 @@ export class ProjectService {
 
   async getMyProjects(userId: string, query?: ProjectSearchQueryDto): Promise<PaginatedProjectsResponse> {
     const qb = this.projectRepo.createQueryBuilder('project');
-    qb.leftJoinAndSelect('project.tags', 'tag');
+    qb.leftJoinAndSelect('project.skills', 'skill');
     qb.where('project.createdByUserId = :userId', { userId });
 
     if (query?.status) {
@@ -557,6 +647,33 @@ export class ProjectService {
     await this.requirementRepo.remove(requirement);
   }
 
+  // ── ARCHIVOS ──
+
+  /**
+   * Resuelve si un usuario puede descargar el documento de solicitud de un proyecto.
+   *
+   * Storage Service delega aquí cuando el solicitante no es el dueño del archivo.
+   * El documento se sube antes de que exista ninguna aplicación, así que no se
+   * puede resolver vía application-service; se busca directamente el proyecto
+   * que referencia ese `requestDocumentFileId`.
+   */
+  async canAccessRequestDocument(
+    fileId: string,
+    userRole: string | null,
+  ): Promise<{ allowed: boolean; reason?: string }> {
+    const project = await this.projectRepo.findOne({ where: { requestDocumentFileId: fileId } });
+    if (!project) {
+      return { allowed: false, reason: 'file_not_linked_to_project' };
+    }
+    // El documento formal de solicitud es parte del aviso del proyecto: cualquier
+    // rol autenticado de la plataforma (estudiante evaluando postular, empresa,
+    // docente, admin) debe poder verlo y descargarlo, no solo admin/faculty.
+    if (userRole === 'admin' || userRole === 'faculty' || userRole === 'student' || userRole === 'company') {
+      return { allowed: true };
+    }
+    return { allowed: false, reason: 'role_not_authorized' };
+  }
+
   // ── ENTREGABLES ──
 
   async getDeliverables(projectId: string): Promise<ProjectDeliverable[]> {
@@ -613,34 +730,56 @@ export class ProjectService {
     await this.deliverableRepo.remove(deliverable);
   }
 
-  // ── TAGS ──
+  // ── HABILIDADES ──
 
-  async addTags(projectId: string, userId: string, tags: string[]): Promise<ProjectTag[]> {
-    const project = await this.getProjectEntityById(projectId);
-    this.verifyOwnership(project, userId);
-
-    const newTags: ProjectTag[] = [];
-    for (const tagStr of tags) {
-      const normalized = tagStr.toLowerCase().trim();
-      const existing = await this.tagRepo.findOne({ where: { projectId, tag: normalized } });
-      if (!existing) {
-        const tag = this.tagRepo.create({ projectId, tag: normalized });
-        newTags.push(await this.tagRepo.save(tag));
-      }
-    }
-    return newTags;
+  async getSkills(projectId: string): Promise<ProjectSkill[]> {
+    await this.getProjectEntityById(projectId);
+    return this.skillRepo.find({
+      where: { projectId },
+      order: { displayOrder: 'ASC', createdAt: 'ASC' },
+    });
   }
 
-  async deleteTag(projectId: string, tagId: string, userId: string): Promise<void> {
+  async addSkill(projectId: string, userId: string, dto: CreateProjectSkillDto): Promise<ProjectSkill> {
     const project = await this.getProjectEntityById(projectId);
     this.verifyOwnership(project, userId);
 
-    const tag = await this.tagRepo.findOne({ where: { id: tagId, projectId } });
-    if (!tag) {
-      throw new NotFoundException('Tag no encontrado');
+    const [skill] = await this.buildSkillEntities(projectId, [dto]);
+    return this.skillRepo.save(skill);
+  }
+
+  async updateSkill(
+    projectId: string,
+    skillId: string,
+    userId: string,
+    dto: UpdateProjectSkillDto,
+  ): Promise<ProjectSkill> {
+    const project = await this.getProjectEntityById(projectId);
+    this.verifyOwnership(project, userId);
+
+    const skill = await this.skillRepo.findOne({ where: { id: skillId, projectId } });
+    if (!skill) {
+      throw new NotFoundException('Habilidad no encontrada');
     }
 
-    await this.tagRepo.remove(tag);
+    if (dto.name && dto.name !== skill.name && !dto.catalogSkillId) {
+      const resolved = await this.resolveCatalogSkillIds([dto.name]);
+      skill.catalogSkillId = resolved.get(dto.name) ?? null;
+    }
+    Object.assign(skill, dto);
+    return this.skillRepo.save(skill);
+  }
+
+  async deleteSkill(projectId: string, skillId: string, userId: string): Promise<void> {
+    const project = await this.getProjectEntityById(projectId);
+    this.verifyOwnership(project, userId);
+
+    const skill = await this.skillRepo.findOne({ where: { id: skillId, projectId } });
+    if (!skill) {
+      throw new NotFoundException('Habilidad no encontrada');
+    }
+
+    await this.skillRepo.remove(skill);
   }
 
   // ── ACTIVIDADES ──
@@ -700,7 +839,7 @@ export class ProjectService {
   async getMatchingData(projectId: string) {
     const project = await this.projectRepo.findOne({
       where: { id: projectId },
-      relations: ['requirements'],
+      relations: ['requirements', 'skills'],
     });
     if (!project) {
       throw new NotFoundException('Proyecto no encontrado');
@@ -708,6 +847,7 @@ export class ProjectService {
 
     return {
       projectId: project.id,
+      title: project.title,
       projectType: project.projectType,
       academicPrograms: project.academicPrograms,
       minimumSemester: project.minimumSemester,
@@ -718,13 +858,27 @@ export class ProjectService {
         isMandatory: r.isMandatory,
         proficiencyLevel: r.proficiencyLevel,
       })),
+      skills: (project.skills || []).map((s) => ({
+        name: s.name,
+        catalogSkillId: s.catalogSkillId,
+        category: s.category,
+        proficiencyLevel: s.proficiencyLevel,
+        isMandatory: s.isMandatory,
+      })),
     };
   }
 
-  async getProjectsBatch(projectIds: string[]): Promise<{ id: string; title: string; companyId: string }[]> {
+  async getProjectsBatch(projectIds: string[]): Promise<
+    { id: string; title: string; companyId: string; createdByUserId: string }[]
+  > {
     if (!projectIds.length) return [];
     const projects = await this.projectRepo.find({ where: { id: In(projectIds) } });
-    return projects.map((p) => ({ id: p.id, title: p.title, companyId: p.companyId }));
+    return projects.map((p) => ({
+      id: p.id,
+      title: p.title,
+      companyId: p.companyId,
+      createdByUserId: p.createdByUserId,
+    }));
   }
 
   async startProject(projectId: string): Promise<void> {
@@ -747,12 +901,37 @@ export class ProjectService {
     this.logger.log(`Proyecto ${projectId} iniciado por asignación de supervisor`);
   }
 
-  async projectExists(projectId: string): Promise<{ exists: boolean; companyId: string | null; status: string | null }> {
-    const project = await this.projectRepo.findOne({ where: { id: projectId } });
+  async projectExists(projectId: string): Promise<{
+    exists: boolean;
+    companyId: string | null;
+    title: string | null;
+    status: string | null;
+    minimumSemester: number | null;
+    academicPrograms: string[] | null;
+    skills: { name: string; catalogSkillId: string | null; category: string; proficiencyLevel: string | null; isMandatory: boolean }[];
+  }> {
+    const project = await this.projectRepo.findOne({ where: { id: projectId }, relations: ['skills'] });
     if (!project) {
-      return { exists: false, companyId: null, status: null };
+      return {
+        exists: false, companyId: null, title: null, status: null, minimumSemester: null,
+        academicPrograms: null, skills: [],
+      };
     }
-    return { exists: true, companyId: project.companyId, status: project.status };
+    return {
+      exists: true,
+      companyId: project.companyId,
+      title: project.title,
+      status: project.status,
+      minimumSemester: project.minimumSemester ?? null,
+      academicPrograms: project.academicPrograms ?? null,
+      skills: (project.skills || []).map((s) => ({
+        name: s.name,
+        catalogSkillId: s.catalogSkillId,
+        category: s.category,
+        proficiencyLevel: s.proficiencyLevel,
+        isMandatory: s.isMandatory,
+      })),
+    };
   }
 
   async incrementApplications(projectId: string): Promise<void> {
@@ -788,7 +967,7 @@ export class ProjectService {
 
     const qb = this.projectRepo
       .createQueryBuilder('p')
-      .leftJoinAndSelect('p.tags', 'tag')
+      .leftJoinAndSelect('p.skills', 'skill')
       .where('p.status = :status', { status: ProjectStatus.PENDING_APPROVAL })
       .orderBy('p.createdAt', 'ASC'); // los más antiguos primero
 
@@ -805,8 +984,12 @@ export class ProjectService {
 
   async reviewProject(
     projectId: string,
-    action: 'approve' | 'reject',
-    reason?: string,
+    reviewerId: string,
+    action: 'approve' | 'needs_changes' | 'reject',
+    options: {
+      notes?: string;
+      categories?: string[];
+    } = {},
   ) {
     const project = await this.projectRepo.findOne({ where: { id: projectId } });
     if (!project) throw new NotFoundException('Proyecto no encontrado');
@@ -814,16 +997,35 @@ export class ProjectService {
       throw new BadRequestException('El proyecto no está pendiente de aprobación');
     }
 
-    const newStatus = action === 'approve' ? ProjectStatus.PUBLISHED : ProjectStatus.DRAFT;
+    if (action === 'reject' && (!options.categories || options.categories.length === 0)) {
+      throw new BadRequestException('Debes seleccionar al menos una categoría de rechazo');
+    }
+    if (action === 'needs_changes' && !options.notes) {
+      throw new BadRequestException('Debes indicar qué cambios se requieren');
+    }
+
+    const newStatus =
+      action === 'approve'
+        ? ProjectStatus.PUBLISHED
+        : action === 'needs_changes'
+          ? ProjectStatus.NEEDS_CHANGES
+          : ProjectStatus.DRAFT;
+
+    const previousStatus = project.status;
     project.status = newStatus;
+    project.facultyReviewerId = reviewerId;
+    project.facultyReviewedAt = new Date();
+    project.facultyReviewNotes = options.notes ?? null;
+    project.facultyRejectionCategories = action === 'reject' ? (options.categories ?? null) : null;
+
     await this.projectRepo.save(project);
 
     await this.eventPublisher.publish('project.status.changed', {
       projectId,
-      companyId:      project.companyId,
-      previousStatus: ProjectStatus.PENDING_APPROVAL,
+      companyId: project.companyId,
+      previousStatus,
       newStatus,
-      reason,
+      reason: options.notes,
     }, 'project-service');
 
     if (action === 'approve') {
@@ -838,9 +1040,30 @@ export class ProjectService {
           isMandatory: r.isMandatory,
         })),
       }, 'project-service');
+
+      await this.eventPublisher.publish('project.faculty_approved', {
+        projectId,
+        companyId: project.companyId,
+        title: project.title,
+      }, 'project-service');
+    } else if (action === 'needs_changes') {
+      await this.eventPublisher.publish('project.needs_changes', {
+        projectId,
+        companyId: project.companyId,
+        title: project.title,
+        notes: options.notes,
+      }, 'project-service');
+    } else {
+      await this.eventPublisher.publish('project.faculty_rejected', {
+        projectId,
+        companyId: project.companyId,
+        title: project.title,
+        categories: options.categories,
+        notes: options.notes,
+      }, 'project-service');
     }
 
-    this.logger.log(`Proyecto ${projectId} → ${action} por admin`);
+    this.logger.log(`Proyecto ${projectId} → ${action} por admin ${reviewerId}`);
     return this.formatProject(project);
   }
 }

@@ -5,7 +5,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { ChatService } from './chat.service';
 import { Conversation, ConversationType } from './entities/conversation.entity';
@@ -17,6 +17,7 @@ import { MessageReaction } from './entities/message-reaction.entity';
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
 const mockEventPublisher = { publish: jest.fn().mockResolvedValue(undefined) };
+const mockHttpClient = { get: jest.fn(), post: jest.fn(), patch: jest.fn() };
 
 const createMockRepo = () => ({
   findOne: jest.fn(),
@@ -142,11 +143,15 @@ describe('ChatService', () => {
         { provide: getRepositoryToken(MessageAttachment), useValue: attachmentRepo },
         { provide: getRepositoryToken(MessageReaction), useValue: reactionRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
+        { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
     }).compile();
 
     service = module.get<ChatService>(ChatService);
     jest.clearAllMocks();
+    // mapMessage() carga adjuntos por consulta separada (ver chat.service.ts) —
+    // por defecto sin adjuntos; los tests que los necesiten sobreescriben esto.
+    attachmentRepo.find.mockResolvedValue([]);
   });
 
   // ── createConversation ───────────────────────────────────────────
@@ -162,6 +167,9 @@ describe('ChatService', () => {
       conversationRepo.save.mockResolvedValue(conv);
       participantRepo.create.mockImplementation((d) => d);
       participantRepo.save.mockResolvedValue(undefined);
+      participantRepo.findOne.mockResolvedValue(makeParticipant({ conversationId: conv.id }));
+      participantRepo.find.mockResolvedValue([makeParticipant({ conversationId: conv.id })]);
+      conversationRepo.findOne.mockResolvedValue(conv);
 
       const result = await service.createConversation(USER_1, dto);
 
@@ -172,7 +180,7 @@ describe('ChatService', () => {
         expect.objectContaining({ createdBy: USER_1 }),
         'chat-service',
       );
-      expect(result).toEqual(conv);
+      expect(result).toEqual(expect.objectContaining({ id: conv.id }));
     });
 
     it('should return existing direct conversation if one already exists', async () => {
@@ -182,11 +190,13 @@ describe('ChatService', () => {
 
       participantRepo.createQueryBuilder.mockReturnValue(makeQb(existingParticipant));
       conversationRepo.findOne.mockResolvedValue(existingConv);
+      participantRepo.findOne.mockResolvedValue(existingParticipant);
+      participantRepo.find.mockResolvedValue([existingParticipant]);
 
       const result = await service.createConversation(USER_1, dto);
 
       expect(conversationRepo.save).not.toHaveBeenCalled();
-      expect(result).toEqual(existingConv);
+      expect(result).toEqual(expect.objectContaining({ id: existingConv.id }));
     });
 
     it('should send initial message if provided', async () => {
@@ -197,10 +207,12 @@ describe('ChatService', () => {
       participantRepo.createQueryBuilder.mockReturnValue(makeQb(null));
       conversationRepo.create.mockReturnValue(conv);
       conversationRepo.save.mockResolvedValue(conv);
+      conversationRepo.findOne.mockResolvedValue(conv);
       participantRepo.create.mockImplementation((d) => d);
       participantRepo.save.mockResolvedValue(undefined);
       // For sendMessage inside createConversation:
       participantRepo.findOne.mockResolvedValue(makeParticipant());
+      participantRepo.find.mockResolvedValue([makeParticipant()]);
       messageRepo.create.mockReturnValue(msg);
       messageRepo.save.mockResolvedValue(msg);
       conversationRepo.update.mockResolvedValue(undefined);
@@ -229,6 +241,7 @@ describe('ChatService', () => {
       const msg = makeMessage({ content: dto.content });
 
       participantRepo.findOne.mockResolvedValue(participant);
+      participantRepo.find.mockResolvedValue([participant]);
       messageRepo.create.mockReturnValue(msg);
       messageRepo.save.mockResolvedValue(msg);
       conversationRepo.update.mockResolvedValue(undefined);
@@ -247,7 +260,12 @@ describe('ChatService', () => {
         expect.objectContaining({ conversationId: CONV_ID, senderId: USER_1 }),
         'chat-service',
       );
-      expect(result).toEqual(msg);
+      expect(result).toEqual(expect.objectContaining({
+        id: msg.id,
+        conversationId: msg.conversationId,
+        senderId: msg.senderId,
+        content: msg.content,
+      }));
     });
 
     it('should throw ForbiddenException if user is not a participant', async () => {

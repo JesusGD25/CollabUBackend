@@ -11,8 +11,8 @@ import {
 } from 'typeorm';
 import { Application } from './application.entity';
 import { DeliverableAttachment } from './deliverable-attachment.entity';
-export { DeliverableStatus, DeliverableType } from './enums';
-import { DeliverableStatus, DeliverableType } from './enums';
+export { DeliverableStatus, DeliverableType, RequesterType } from './enums';
+import { DeliverableStatus, DeliverableType, RequesterType } from './enums';
 
 @Entity('student_deliverables')
 @Index('idx_student_deliverables_application', ['applicationId'])
@@ -43,6 +43,13 @@ export class StudentDeliverable {
   @Column({ name: 'created_by_user_id', type: 'varchar', nullable: true })
   createdByUserId: string | null;
 
+  /** Quién lo solicitó — determina visibilidad (default company para retrocompatibilidad). */
+  @Column({ name: 'requester_type', type: 'enum', enum: RequesterType, default: RequesterType.COMPANY })
+  requesterType: RequesterType;
+
+  @Column({ name: 'template_file_id', type: 'uuid', nullable: true })
+  templateFileId: string | null;
+
   @Column({ name: 'assigned_at', type: 'timestamptz', nullable: true })
   assignedAt: Date | null;
 
@@ -69,6 +76,9 @@ export class StudentDeliverable {
 
   @Column({ name: 'reviewed_by', type: 'varchar', nullable: true })
   reviewedBy: string | null;
+
+  @Column({ name: 'reviewed_by_role', type: 'varchar', length: 50, nullable: true })
+  reviewedByRole: string | null;
 
   @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
   reviewedAt: Date | null;

@@ -41,6 +41,14 @@ export class AnalyticsController {
     return this.analyticsService.getDashboard();
   }
 
+  @Get('academic-kpis')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY)
+  @ApiOperation({ summary: 'KPIs del flujo académico: carga docente, tiempos de aceptación, tasas de completitud' })
+  async getAcademicKpis() {
+    const [assignmentStats, academicStats] = await this.analyticsService.getAcademicKpis();
+    return { assignmentStats, academicStats };
+  }
+
   // ─── Platform Metrics ────────────────────────────────────────────────────────
 
   @Get('platform')

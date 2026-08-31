@@ -5,7 +5,7 @@ import { HttpModule, HttpService } from '@nestjs/axios';
 import { Project } from './entities/project.entity';
 import { ProjectRequirement } from './entities/project-requirement.entity';
 import { ProjectDeliverable } from './entities/project-deliverable.entity';
-import { ProjectTag } from './entities/project-tag.entity';
+import { ProjectSkill } from './entities/project-skill.entity';
 import { ProjectActivity } from './entities/project-activity.entity';
 
 import { ProjectService } from './project.service';
@@ -19,7 +19,7 @@ import { MicroserviceHttpClient } from '@collab-u/shared';
       Project,
       ProjectRequirement,
       ProjectDeliverable,
-      ProjectTag,
+      ProjectSkill,
       ProjectActivity,
     ]),
     HttpModule,

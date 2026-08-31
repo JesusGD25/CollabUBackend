@@ -14,6 +14,7 @@ import {
   HttpStatus,
   Res,
   StreamableFile,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiConsumes, ApiParam, ApiBody } from '@nestjs/swagger';
@@ -44,12 +45,8 @@ export class StorageController {
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: UploadFileDto,
   ) {
-    console.log('[StorageController] uploadFile called');
-    console.log('[StorageController] user:', user);
-    console.log('[StorageController] file details:', file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : 'no file');
-    console.log('[StorageController] dto:', dto);
     if (!file) {
-      throw new Error('No se proporcionó ningún archivo');
+      throw new BadRequestException('No se proporcionó ningún archivo');
     }
     return this.storageService.uploadFile(user.userId, file, dto);
   }
@@ -73,24 +70,29 @@ export class StorageController {
     @CurrentUser() user: any,
     @Param('fileId', ParseUUIDPipe) fileId: string,
   ) {
-    return this.storageService.getFileInfo(fileId, user.userId);
+    return this.storageService.getFileInfo(fileId, user.userId, user?.role ?? null);
   }
 
   @Get('files/:fileId/download')
   @ApiOperation({ summary: 'Descargar archivo' })
   @ApiParam({ name: 'fileId', type: 'string', format: 'uuid' })
   @ApiResponse({ status: 200, description: 'Archivo binario' })
+  @ApiResponse({ status: 403, description: 'Sin acceso al archivo' })
   async downloadFile(
     @Param('fileId', ParseUUIDPipe) fileId: string,
     @Res() res: Response,
     @CurrentUser() user: any,
   ) {
-    const userId = user?.userId || null;
-    const { file, filePath } = await this.storageService.getFileForDownload(fileId, userId);
+    const userId = user?.userId || user?.id || null;
+    const { file, filePath } = await this.storageService.getFileForDownload(
+      fileId,
+      userId,
+      user?.role ?? null,
+    );
 
     res.set({
       'Content-Type': file.mimeType,
-      'Content-Disposition': `attachment; filename="${file.originalName}"`,
+      'Content-Disposition': `inline; filename="${file.originalName}"`,
       'Content-Length': file.fileSizeBytes.toString(),
     });
 
@@ -126,7 +128,7 @@ export class StorageController {
     @Body('changeNote') changeNote?: string,
   ) {
     if (!file) {
-      throw new Error('No se proporcionó ningún archivo');
+      throw new BadRequestException('No se proporcionó ningún archivo');
     }
     return this.storageService.uploadNewVersion(fileId, user.userId, file, changeNote);
   }

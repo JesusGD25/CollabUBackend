@@ -3,9 +3,9 @@ import { THROTTLE_CONFIG } from './throttle.config';
 
 describe('Gateway Config', () => {
   describe('GATEWAY_ROUTES', () => {
-    it('debería definir 13 servicios', () => {
+    it('debería definir 13 servicios REST + 2 rutas WebSocket', () => {
       const services = Object.keys(GATEWAY_ROUTES);
-      expect(services).toHaveLength(13);
+      expect(services).toHaveLength(15);
     });
 
     it('debería incluir todos los servicios requeridos', () => {
@@ -27,7 +27,7 @@ describe('Gateway Config', () => {
         expect(route).toHaveProperty('changeOrigin');
         expect(route).toHaveProperty('requiresAuth');
         expect(typeof route.target).toBe('string');
-        expect(route.pathPrefix).toMatch(/^\/api\/v1\//);
+        expect(route.pathPrefix).toMatch(name.endsWith('-ws') ? /^\/ws\// : /^\/api\/v1\//);
         expect(route.changeOrigin).toBe(true);
       }
     });
