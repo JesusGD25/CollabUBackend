@@ -4,11 +4,12 @@ import {
   Post,
   Body,
   Param,
+  Query,
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 
 import { CompanyService } from './company.service';
 
@@ -16,6 +17,15 @@ import { CompanyService } from './company.service';
 @Controller('internal/companies')
 export class CompanyInternalController {
   constructor(private readonly companyService: CompanyService) {}
+
+  @Get('analytics/stats')
+  @ApiOperation({ summary: 'Obtener estadísticas agregadas de empresas (uso interno)' })
+  @ApiQuery({ name: 'from', required: false, type: 'string' })
+  @ApiQuery({ name: 'to', required: false, type: 'string' })
+  @ApiResponse({ status: 200, description: 'Estadísticas obtenidas' })
+  async getAnalyticsStats(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.companyService.getAnalyticsStats(from, to);
+  }
 
   @Get(':userId/basic-info')
   @ApiOperation({ summary: 'Obtener datos básicos de empresa (uso interno)' })

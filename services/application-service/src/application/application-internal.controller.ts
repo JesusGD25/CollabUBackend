@@ -70,6 +70,20 @@ export class ApplicationInternalController {
     return this.applicationService.getAcademicRecordStats();
   }
 
+  @Get('analytics/stats')
+  getApplicationAnalyticsStats(
+    @Query('projectId') projectId?: string,
+    @Query('companyId') companyId?: string,
+    @Query('studentId') studentId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    // companyId no se filtra a nivel de application-service (ver comentario en el service);
+    // se acepta el query param para compatibilidad de contrato pero se ignora aquí.
+    void companyId;
+    return this.applicationService.getApplicationAnalyticsStats({ projectId, studentId, from, to });
+  }
+
   @Get(':id/academic-record-status')
   async getAcademicRecordStatus(@Param('id', ParseUUIDPipe) id: string) {
     try {

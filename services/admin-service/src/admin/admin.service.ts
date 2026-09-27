@@ -966,7 +966,7 @@ export class AdminService implements OnModuleInit {
     byRole: Record<string, number>;
     byStatus: Record<string, number>;
     avgAcceptanceHours: number | null;
-    supervisorWorkload: { supervisorId: string; activeCount: number }[];
+    supervisorWorkload: { supervisorId: string; supervisorName: string | null; activeCount: number }[];
   }> {
     const assignments = await this.assignmentRepo.find();
 
@@ -980,7 +980,14 @@ export class AdminService implements OnModuleInit {
       byStatus[a.status] = (byStatus[a.status] ?? 0) + 1;
 
       if (a.role === AssignmentRole.ASESOR && a.acceptedAt) {
-        acceptanceDurationsMs.push(new Date(a.acceptedAt).getTime() - new Date(a.createdAt).getTime());
+        const durationMs = new Date(a.acceptedAt).getTime() - new Date(a.createdAt).getTime();
+        // Una duración negativa es causalmente imposible (no se puede aceptar antes de crear) —
+        // señal de dato de seed inconsistente (created_at cayó en NOW() del insert en vez de una
+        // fecha histórica coherente con accepted_at). Se excluye del promedio en vez de dejar que
+        // corrompa la métrica con un número negativo sin sentido.
+        if (durationMs >= 0) {
+          acceptanceDurationsMs.push(durationMs);
+        }
       }
 
       if (a.status === AssignmentStatus.ACCEPTED || a.status === AssignmentStatus.ACTIVE) {
@@ -992,13 +999,80 @@ export class AdminService implements OnModuleInit {
       ? acceptanceDurationsMs.reduce((sum, ms) => sum + ms, 0) / acceptanceDurationsMs.length / 1000 / 60 / 60
       : null;
 
+    // `supervisor_assignments.supervisor_id` referencia `Supervisor.id` (la PK interna de la tabla
+    // "supervisors"), NO el userId directamente — hay que resolver primero id→userId contra la
+    // propia tabla local antes de poder pedir el nombre a user-service (mismo patrón de dos saltos
+    // que getSupervisors() ya usa, solo que ahí parte de una lista de Supervisor completa y acá solo
+    // tenemos los ids sueltos del agrupamiento). Si algo falla se degrada a null, no rompe el endpoint.
+    const supervisorIds = [...workloadMap.keys()];
+    let supervisorNames = new Map<string, string>();
+    if (supervisorIds.length > 0) {
+      try {
+        const supervisorRows = await this.supervisorRepo.find({ where: { id: In(supervisorIds) } });
+        const idToUserId = new Map(supervisorRows.map((s) => [s.id, s.userId]));
+        const userIds = supervisorRows.map((s) => s.userId);
+        const profiles = userIds.length
+          ? await this.httpClient.post<{ userId: string; firstName: string; lastName: string }[]>(
+              'user',
+              '/internal/users/batch-basic',
+              { userIds },
+            )
+          : [];
+        const userIdToName = new Map(profiles.map((u) => [u.userId, `${u.firstName} ${u.lastName}`.trim()]));
+        for (const supervisorId of supervisorIds) {
+          const userId = idToUserId.get(supervisorId);
+          const name = userId ? userIdToName.get(userId) : undefined;
+          if (name) supervisorNames.set(supervisorId, name);
+        }
+      } catch (err) {
+        this.logger.warn(`No se pudieron obtener nombres de supervisores para el dashboard: ${err.message}`);
+      }
+    }
+
     return {
       totalAssignments: assignments.length,
       byRole,
       byStatus,
       avgAcceptanceHours: avgAcceptanceHours !== null ? Math.round(avgAcceptanceHours * 100) / 100 : null,
-      supervisorWorkload: [...workloadMap.entries()].map(([supervisorId, activeCount]) => ({ supervisorId, activeCount })),
+      supervisorWorkload: [...workloadMap.entries()].map(([supervisorId, activeCount]) => ({
+        supervisorId,
+        supervisorName: supervisorNames.get(supervisorId) ?? null,
+        activeCount,
+      })),
     };
+  }
+
+  /**
+   * Uso interno cross-service: todas las asignaciones (activas o no) de un docente puntual, para
+   * el reporte "Carga de Docente" de analytics-service. `supervisorId` es `Supervisor.id` (la PK
+   * de la tabla local, no el userId — ver comentario en getAssignmentStats() sobre esa distinción).
+   */
+  async getAssignmentsBySupervisor(supervisorId: string): Promise<
+    {
+      id: string;
+      studentId: string;
+      projectId: string;
+      role: AssignmentRole;
+      status: AssignmentStatus;
+      startDate: string;
+      endDate: string | null;
+      acceptedAt: Date | null;
+    }[]
+  > {
+    const assignments = await this.assignmentRepo.find({
+      where: { supervisorId },
+      order: { createdAt: 'DESC' },
+    });
+    return assignments.map((a) => ({
+      id: a.id,
+      studentId: a.studentId,
+      projectId: a.projectId,
+      role: a.role,
+      status: a.status,
+      startDate: a.startDate,
+      endDate: a.endDate ?? null,
+      acceptedAt: a.acceptedAt,
+    }));
   }
 
   /** Uso interno cross-service: resuelve el rol (asesor/jurado) de un docente sobre una aplicación. */

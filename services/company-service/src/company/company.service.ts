@@ -345,6 +345,29 @@ export class CompanyService {
     await this.profileRepo.save(profile);
   }
 
+  async getAnalyticsStats(from?: string, to?: string): Promise<{
+    totalCreated: number;
+    totalActive: number;
+  }> {
+    const createdQuery = this.profileRepo.createQueryBuilder('company');
+    if (from) {
+      createdQuery.andWhere('company.created_at >= :from', { from });
+    }
+    if (to) {
+      createdQuery.andWhere('company.created_at <= :to', { to });
+    }
+    const totalCreated = await createdQuery.getCount();
+
+    const totalActive = await this.profileRepo.count({
+      where: {
+        isActive: true,
+        verificationStatus: VerificationStatus.VERIFIED,
+      },
+    });
+
+    return { totalCreated, totalActive };
+  }
+
   // ── UTILIDADES PRIVADAS ──
 
   private async findProfileByUserId(userId: string): Promise<CompanyProfile> {

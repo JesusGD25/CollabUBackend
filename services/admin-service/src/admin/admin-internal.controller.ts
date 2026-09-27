@@ -47,6 +47,16 @@ export class AdminInternalController {
     return this.adminService.getAssignmentsByApplication(applicationId);
   }
 
+  @Get('supervisors/:id')
+  getSupervisorById(@Param('id') id: string) {
+    return this.adminService.getSupervisorById(id);
+  }
+
+  @Get('supervisors/:id/assignments')
+  getAssignmentsBySupervisor(@Param('id') id: string) {
+    return this.adminService.getAssignmentsBySupervisor(id);
+  }
+
   @Get('skills')
   getInternalSkillCatalog() {
     return this.adminService.getInternalSkillCatalog();

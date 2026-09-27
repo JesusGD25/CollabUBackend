@@ -10,7 +10,7 @@ import { Repository } from 'typeorm';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { StudentProfile } from './entities/student-profile.entity';
-import { Skill } from './entities/skill.entity';
+import { Skill, ProficiencyLevel } from './entities/skill.entity';
 import { Experience } from './entities/experience.entity';
 import { Education } from './entities/education.entity';
 import { Certification } from './entities/certification.entity';
@@ -549,6 +549,106 @@ export class StudentService {
     profile.averageRating = averageRating;
     profile.totalRatings = totalRatings;
     await this.profileRepo.save(profile);
+  }
+
+  // ── ANALYTICS INTERNO ──
+
+  /**
+   * Estadísticas agregadas de estudiantes para analytics-service.
+   * `totalCreated` respeta el filtro de fechas (createdAt); `avgProfileCompleteness`
+   * es un promedio "a día de hoy" sobre TODOS los perfiles actuales, sin filtrar por fecha.
+   */
+  async getAnalyticsStats(from?: string, to?: string): Promise<{
+    totalCreated: number;
+    avgProfileCompleteness: number | null;
+  }> {
+    const countQb = this.profileRepo.createQueryBuilder('student');
+    if (from) {
+      countQb.andWhere('student.createdAt >= :from', { from });
+    }
+    if (to) {
+      countQb.andWhere('student.createdAt <= :to', { to });
+    }
+    const totalCreated = await countQb.getCount();
+
+    const avgRow = await this.profileRepo
+      .createQueryBuilder('student')
+      .select('AVG(student.profileCompleteness)', 'avg')
+      .getRawOne<{ avg: string | null }>();
+    const avgProfileCompleteness = avgRow?.avg !== null && avgRow?.avg !== undefined
+      ? Math.round(Number(avgRow.avg) * 100) / 100
+      : null;
+
+    return { totalCreated, avgProfileCompleteness };
+  }
+
+  /**
+   * Oferta actual de skills entre todos los estudiantes, agrupada por catálogo.
+   * Clave de agrupación: `catalogSkillId ?? name` (normalizado en minúsculas) — se prefiere el
+   * id del catálogo maestro cuando existe; si la skill es "libre" (catalogSkillId null) se
+   * agrupa por nombre normalizado para evitar duplicados por mayúsculas/espacios.
+   */
+  async getSkillsSupply(): Promise<
+    Record<
+      string,
+      { supplyCount: number; avgProficiencyLevel: number; category: string; name: string }
+    >
+  > {
+    const proficiencyToNumber: Record<string, number> = {
+      [ProficiencyLevel.BEGINNER]: 1,
+      [ProficiencyLevel.INTERMEDIATE]: 2,
+      [ProficiencyLevel.ADVANCED]: 3,
+      [ProficiencyLevel.EXPERT]: 4,
+    };
+
+    const rows = await this.skillRepo
+      .createQueryBuilder('skill')
+      .select('skill.catalogSkillId', 'catalogSkillId')
+      .addSelect('skill.name', 'name')
+      .addSelect('skill.category', 'category')
+      .addSelect('skill.proficiencyLevel', 'proficiencyLevel')
+      .getRawMany<{
+        catalogSkillId: string | null;
+        name: string;
+        category: string;
+        proficiencyLevel: string;
+      }>();
+
+    const groups = new Map<
+      string,
+      { supplyCount: number; proficiencySum: number; category: string; name: string }
+    >();
+
+    for (const row of rows) {
+      const key = row.catalogSkillId ?? row.name.trim().toLowerCase();
+      const proficiencyValue = proficiencyToNumber[row.proficiencyLevel] ?? 0;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.supplyCount += 1;
+        existing.proficiencySum += proficiencyValue;
+      } else {
+        groups.set(key, {
+          supplyCount: 1,
+          proficiencySum: proficiencyValue,
+          category: row.category,
+          name: row.name,
+        });
+      }
+    }
+
+    const result: Record<
+      string,
+      { supplyCount: number; avgProficiencyLevel: number; category: string; name: string }
+    > = {};
+    for (const [key, group] of groups.entries()) {
+      result[key] = {
+        supplyCount: group.supplyCount,
+        avgProficiencyLevel: Math.round((group.proficiencySum / group.supplyCount) * 100) / 100,
+        category: group.category,
+        name: group.name,
+      };
+    }
+    return result;
   }
 
   // ── UTILIDADES PRIVADAS ──

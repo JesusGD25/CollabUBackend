@@ -1066,5 +1066,99 @@ export class ProjectService {
     this.logger.log(`Proyecto ${projectId} → ${action} por admin ${reviewerId}`);
     return this.formatProject(project);
   }
+
+  // ── ANALYTICS INTERNO (agregados para analytics-service) ──
+
+  private buildAnalyticsStatsQuery(companyId?: string, from?: string, to?: string) {
+    const qb = this.projectRepo.createQueryBuilder('project');
+    if (companyId) qb.andWhere('project.companyId = :companyId', { companyId });
+    if (from) qb.andWhere('project.createdAt >= :from', { from });
+    if (to) qb.andWhere('project.createdAt <= :to', { to });
+    return qb;
+  }
+
+  async getInternalAnalyticsStats(
+    companyId?: string,
+    from?: string,
+    to?: string,
+  ): Promise<{
+    totalCreated: number;
+    byStatus: Record<string, number>;
+    activeCount: number;
+    avgTimeToFillDays: number | null;
+  }> {
+    const totalCreated = await this.buildAnalyticsStatsQuery(companyId, from, to).getCount();
+
+    const statusRows = await this.buildAnalyticsStatsQuery(companyId, from, to)
+      .select('project.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('project.status')
+      .getRawMany<{ status: ProjectStatus; count: string }>();
+
+    const byStatus: Record<string, number> = {};
+    for (const status of Object.values(ProjectStatus)) {
+      byStatus[status] = 0;
+    }
+    for (const row of statusRows) {
+      byStatus[row.status] = parseInt(row.count, 10);
+    }
+
+    // activeCount es "a hoy": no aplica el filtro from/to. Si se pasa companyId sí se
+    // respeta (analytics-service lo necesita para el resumen por-empresa, donde debe ser
+    // un subconjunto de totalCreated) — sin companyId queda como estado global de la
+    // plataforma (uso del cron diario, ver AnalyticsCronService).
+    const activeWhere: any = { status: In([ProjectStatus.PUBLISHED, ProjectStatus.IN_PROGRESS]) };
+    if (companyId) {
+      activeWhere.companyId = companyId;
+    }
+    const activeCount = await this.projectRepo.count({ where: activeWhere });
+
+    // avgTimeToFillDays: project-service no tiene columna publishedAt/startedAt — solo
+    // existen createdAt, updatedAt, facultyReviewedAt y submittedForReviewAt, ninguna de
+    // las cuales representa de forma confiable "cuándo se publicó" o "cuándo arrancó el
+    // trabajo". Usar createdAt como proxy sería engañoso (createdAt es cuando se creó el
+    // borrador, no cuando se publicó ni cuando empezó el trabajo). Por eso devolvemos null:
+    // analytics-service debe derivar este dato de otra fuente (p. ej. fechas de aceptación
+    // de aplicación en application-service).
+    const avgTimeToFillDays: number | null = null;
+
+    return { totalCreated, byStatus, activeCount, avgTimeToFillDays };
+  }
+
+  async getInternalSkillsDemand(): Promise<
+    Record<string, { demandCount: number; category: string; name: string }>
+  > {
+    const rows = await this.skillRepo
+      .createQueryBuilder('skill')
+      .innerJoin('skill.project', 'project')
+      .where('project.status IN (:...statuses)', {
+        statuses: [ProjectStatus.PUBLISHED, ProjectStatus.IN_PROGRESS],
+      })
+      .select('skill.catalogSkillId', 'catalogSkillId')
+      .addSelect('skill.name', 'name')
+      .addSelect('skill.category', 'category')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('skill.catalogSkillId')
+      .addGroupBy('skill.name')
+      .addGroupBy('skill.category')
+      .getRawMany<{ catalogSkillId: string | null; name: string; category: string; count: string }>();
+
+    // Clave de agrupación: catalogSkillId cuando la habilidad viene del catálogo maestro
+    // (admin-service); si es una habilidad libre (catalogSkillId null) se agrupa por su
+    // `name` tal cual está guardado. El GROUP BY en SQL ya es por (catalogSkillId, name,
+    // category), así que el merge aquí solo combina el caso raro de mismo catalogSkillId
+    // con variantes de nombre/categoría bajo una sola clave.
+    const result: Record<string, { demandCount: number; category: string; name: string }> = {};
+    for (const row of rows) {
+      const key = row.catalogSkillId ?? row.name;
+      const count = parseInt(row.count, 10);
+      if (result[key]) {
+        result[key].demandCount += count;
+      } else {
+        result[key] = { demandCount: count, category: row.category, name: row.name };
+      }
+    }
+    return result;
+  }
 }
 
