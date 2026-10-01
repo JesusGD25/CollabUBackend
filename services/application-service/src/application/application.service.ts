@@ -1137,6 +1137,7 @@ export class ApplicationService {
     await this.applicationRepo.save(application);
 
     await this.instantiateProjectDeliverables(applicationId);
+    await this.discardOtherActiveApplications(application.studentId, applicationId);
 
     if (supervisorAssignmentId) {
       const existingRecord = await this.academicRecordRepo.findOne({ where: { applicationId } });
@@ -1841,6 +1842,71 @@ export class ApplicationService {
           'system',
           'Cuenta de usuario desactivada',
         );
+      }
+    }
+  }
+
+  /**
+   * EST-04: cuando una postulación del estudiante inicia formalmente (IN_PROGRESS, asesor
+   * aceptó), el resto de sus postulaciones activas en OTROS proyectos ya no tienen sentido
+   * (D1: el estudiante solo puede tener un proceso académico en curso). Se retiran como
+   * `WITHDRAWN` (D3: no es un rechazo de la empresa, es un retiro por el sistema) y se
+   * notifica al estudiante. Mismo patrón que `withdrawAllByStudent`.
+   */
+  private async discardOtherActiveApplications(studentId: string, exceptApplicationId: string): Promise<void> {
+    const activeStatuses: ApplicationStatus[] = [
+      ApplicationStatus.PENDING,
+      ApplicationStatus.UNDER_REVIEW,
+      ApplicationStatus.SHORTLISTED,
+      ApplicationStatus.INTERVIEW,
+    ];
+
+    for (const status of activeStatuses) {
+      const apps = await this.applicationRepo.find({ where: { studentId, status } });
+
+      for (const app of apps) {
+        if (app.id === exceptApplicationId) continue;
+
+        app.status = ApplicationStatus.WITHDRAWN;
+        app.withdrawalReason = 'Retirada automáticamente: iniciaste otro proceso académico';
+        await this.applicationRepo.save(app);
+
+        await this.addTimelineEntry(
+          app.id,
+          status,
+          ApplicationStatus.WITHDRAWN,
+          'system',
+          'Retirada automáticamente al iniciar otro proceso académico',
+        );
+
+        // Mismo shape enriquecido que `updateStatus` (línea ~1287): Notification Service
+        // solo dispara la notificación al estudiante con los alias `status`/`studentUserId`.
+        let projectTitleForEvent: string | null = null;
+        try {
+          const projectInfo = await this.httpClient.get<{ title: string | null }>(
+            'project',
+            `/internal/projects/${app.projectId}/exists`,
+          );
+          projectTitleForEvent = projectInfo?.title ?? null;
+        } catch (err) {
+          this.logger.warn(
+            `No se pudo enriquecer evento de auto-retiro con datos del proyecto ${app.projectId}: ${err.message}`,
+          );
+        }
+
+        await this.eventPublisher.publish('application.status.changed', {
+          applicationId: app.id,
+          projectId: app.projectId,
+          studentId,
+          previousStatus: status,
+          newStatus: ApplicationStatus.WITHDRAWN,
+          changedBy: 'system',
+          status: ApplicationStatus.WITHDRAWN,
+          studentUserId: studentId,
+          projectTitle: projectTitleForEvent,
+        }, 'application-service');
+
+        this.logger.log(`Postulación ${app.id} auto-retirada (${status} → withdrawn) al iniciar ${exceptApplicationId}`);
       }
     }
   }

@@ -305,16 +305,18 @@ export class AnalyticsService {
   }
 
   /**
-   * Resumen "ahora mismo" de un estudiante — calculado bajo demanda. `profileCompleteness` y `responseRate`
-   * no tienen hoy un endpoint interno por-estudiante (solo promedios globales en student-service) — se
-   * mantienen en el último valor snapshot si existe, documentado como limitación a cerrar en un follow-up.
+   * Resumen "ahora mismo" de un estudiante — calculado bajo demanda. `profileCompleteness` viene en vivo
+   * de student-service (columna real `student_profiles.profile_completeness`, expuesta en matching-data).
+   * `responseRate` se calcula en vivo desde appStats (% de aplicaciones ya decididas, no pending).
+   * `avgMatchScore` sigue sin fuente por-estudiante: matching-service hoy solo admite filtro from/to
+   * (contrato §1.5), no studentId — limitación real documentada, no fabricada.
    */
   async getStudentMetricsSummary(studentId: string): Promise<Partial<StudentMetrics> & { studentId: string }> {
     const [appStats, evalStats, matchingData, storedArr] = await Promise.all([
       this.fetchApplicationStats({ studentId }),
       this.fetchEvaluationStats({ studentId }),
       this.httpClient
-        .get<{ skills: unknown[] }>('student', `/internal/students/${studentId}/matching-data`)
+        .get<{ skills: unknown[]; profileCompleteness?: number }>('student', `/internal/students/${studentId}/matching-data`)
         .catch(() => null),
       this.studentMetricsRepo.find({ where: { studentId }, order: { snapshotDate: 'DESC' }, take: 1 }),
     ]);
@@ -330,6 +332,10 @@ export class AnalyticsService {
     const avgEvaluationReceived = this.weightedAverage(
       receivedTypes.map((t) => evalStats?.byEvaluationType?.[t]).filter(Boolean) as { avg: number | null; count: number }[],
     );
+    const responseRate =
+      appStats && appStats.total > 0
+        ? Math.round(((appStats.acceptedCount + appStats.rejectedCount) / appStats.total) * 10000) / 100
+        : null;
 
     return {
       id: stored?.id,
@@ -339,11 +345,11 @@ export class AnalyticsService {
       rejectedCount: appStats?.rejectedCount ?? stored?.rejectedCount ?? 0,
       // matching-service hoy no soporta filtro por estudiante (contrato §1.5 solo admite from/to).
       avgMatchScore: stored?.avgMatchScore ?? null,
-      profileCompleteness: stored?.profileCompleteness ?? 0,
+      profileCompleteness: matchingData?.profileCompleteness ?? stored?.profileCompleteness ?? 0,
       avgEvaluationScore: avgEvaluationReceived ?? stored?.avgEvaluationScore ?? null,
       totalProjectsCompleted: appStats?.byStatus?.['completed'] ?? stored?.totalProjectsCompleted ?? 0,
       skillsCount: matchingData?.skills?.length ?? stored?.skillsCount ?? 0,
-      responseRate: stored?.responseRate ?? null,
+      responseRate: responseRate ?? stored?.responseRate ?? null,
       snapshotDate: stored?.snapshotDate ?? new Date(),
       createdAt: stored?.createdAt ?? new Date(),
     };
@@ -386,16 +392,17 @@ export class AnalyticsService {
 
   /**
    * Resumen "ahora mismo" de una empresa. totalProjects/activeProjects se calculan en vivo (project-service
-   * SÍ soporta filtro por companyId). totalApplicationsReceived/avgEvaluationGiven/Received requieren un
-   * join de dos saltos (companyId → sus projectIds → aplicaciones/evaluaciones de esos proyectos) que
-   * application-service y evaluation-service no resuelven hoy con un solo companyId (confirmado en su
-   * propia implementación) — se mantienen en el último snapshot como limitación documentada, no fabricada.
+   * SÍ soporta filtro por companyId). totalApplicationsReceived/avgTimeToRespondHours/avgEvaluationGiven/
+   * Received/totalStudentsHired requieren un join de dos saltos (companyId → sus projectIds → aplicaciones/
+   * evaluaciones de esos proyectos) — mismo patrón two-hop ya usado en el reporte 'company_performance'
+   * (ver buildReportData), replicado aquí en vivo en vez de depender del snapshot nunca poblado.
    */
   async getCompanyMetricsSummary(
     companyId: string,
   ): Promise<Partial<CompanyMetrics> & { companyId: string; completedProjects: number }> {
-    const [projectStats, storedArr] = await Promise.all([
+    const [projectStats, projectIds, storedArr] = await Promise.all([
       this.fetchProjectStats({ companyId }),
+      this.fetchCompanyProjectIds(companyId),
       this.companyMetricsRepo.find({ where: { companyId }, order: { snapshotDate: 'DESC' }, take: 1 }),
     ]);
     const stored = storedArr[0] ?? null;
@@ -403,6 +410,30 @@ export class AnalyticsService {
     if (!projectStats && !stored) {
       throw new NotFoundException(`No hay métricas para la empresa ${companyId}`);
     }
+
+    const ids = projectIds ?? [];
+    const [appStatsPerProject, evalStatsPerProject] = await Promise.all([
+      Promise.all(ids.map((projectId) => this.fetchApplicationStats({ projectId }))),
+      Promise.all(ids.map((projectId) => this.fetchEvaluationStats({ projectId }))),
+    ]);
+
+    const totalApplicationsReceived = appStatsPerProject.reduce((sum, s) => sum + (s?.total ?? 0), 0);
+    const totalStudentsHired = appStatsPerProject.reduce((sum, s) => sum + (s?.acceptedCount ?? 0), 0);
+    const avgTimeToRespondHours = this.weightedAverage(
+      appStatsPerProject
+        .filter((s): s is ApplicationStats => !!s && s.total > 0)
+        .map((s) => ({ avg: s.avgTimeToDecisionHours, count: s.total })),
+    );
+    const givenEntries = evalStatsPerProject
+      .filter((s): s is EvaluationStats => !!s)
+      .map((s) => s.byEvaluationType?.['company_evaluates_student'])
+      .filter(Boolean) as { avg: number | null; count: number }[];
+    const receivedEntries = evalStatsPerProject
+      .filter((s): s is EvaluationStats => !!s)
+      .map((s) => s.byEvaluationType?.['student_evaluates_company'])
+      .filter(Boolean) as { avg: number | null; count: number }[];
+    const avgEvaluationGiven = this.weightedAverage(givenEntries);
+    const avgEvaluationReceived = this.weightedAverage(receivedEntries);
 
     const totalProjects = projectStats?.totalCreated ?? stored?.totalProjects ?? 0;
     const activeProjects = projectStats?.activeCount ?? stored?.activeProjects ?? 0;
@@ -420,11 +451,11 @@ export class AnalyticsService {
       // expuesto explícitamente en vez de dejar que el frontend infiera "finalizados" restando
       // totalProjects-activeProjects (eso incluiría draft/cancelled/needs_changes, no solo completed).
       completedProjects,
-      totalApplicationsReceived: stored?.totalApplicationsReceived ?? 0,
-      avgTimeToRespondHours: stored?.avgTimeToRespondHours ?? null,
-      avgEvaluationGiven: stored?.avgEvaluationGiven ?? null,
-      avgEvaluationReceived: stored?.avgEvaluationReceived ?? null,
-      totalStudentsHired: stored?.totalStudentsHired ?? 0,
+      totalApplicationsReceived: projectIds ? totalApplicationsReceived : stored?.totalApplicationsReceived ?? 0,
+      avgTimeToRespondHours: projectIds ? avgTimeToRespondHours : stored?.avgTimeToRespondHours ?? null,
+      avgEvaluationGiven: projectIds ? avgEvaluationGiven : stored?.avgEvaluationGiven ?? null,
+      avgEvaluationReceived: projectIds ? avgEvaluationReceived : stored?.avgEvaluationReceived ?? null,
+      totalStudentsHired: projectIds ? totalStudentsHired : stored?.totalStudentsHired ?? 0,
       completionRate,
       snapshotDate: stored?.snapshotDate ?? new Date(),
       createdAt: stored?.createdAt ?? new Date(),

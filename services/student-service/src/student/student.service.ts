@@ -516,6 +516,7 @@ export class StudentService {
       programId: profile.programId,
       semester: profile.semester,
       availability: profile.availability,
+      profileCompleteness: profile.profileCompleteness,
       skills: (profile.skills || []).map((s) => ({
         name: s.name,
         catalogSkillId: s.catalogSkillId,

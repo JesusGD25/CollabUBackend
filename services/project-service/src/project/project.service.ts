@@ -492,7 +492,9 @@ export class ProjectService {
     }
 
     if (query.skill) {
-      qb.andWhere('skill.name = :skill', { skill: query.skill.toLowerCase() });
+      // project_skills.name tiene casing mixto (seed histórico: "React", "python", "postgresql"),
+      // por eso la comparación debe ser case-insensitive en ambos lados, no solo lowercasear el input.
+      qb.andWhere('LOWER(skill.name) = :skill', { skill: query.skill.toLowerCase() });
     }
 
     if (query.companyId) {
@@ -504,6 +506,14 @@ export class ProjectService {
         '(project.minimumSemester IS NULL OR project.minimumSemester <= :semester)',
         { semester: query.minimumSemester },
       );
+    }
+
+    if (query.durationMin !== undefined) {
+      qb.andWhere('project.durationMonths >= :durationMin', { durationMin: query.durationMin });
+    }
+
+    if (query.durationMax !== undefined) {
+      qb.andWhere('project.durationMonths <= :durationMax', { durationMax: query.durationMax });
     }
 
     // Ordenamiento
