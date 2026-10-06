@@ -129,7 +129,7 @@ export class StudentService {
 
   async getProfileById(studentUserId: string): Promise<StudentProfile> {
     const profile = await this.profileRepo.findOne({
-      where: { userId: studentUserId },
+      where: [{ userId: studentUserId }, { id: studentUserId }],
       relations: ['skills', 'experiences', 'education', 'certifications', 'languages', 'interests'],
     });
     if (!profile) {
