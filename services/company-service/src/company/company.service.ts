@@ -98,7 +98,7 @@ export class CompanyService {
 
   async getProfileById(companyUserId: string): Promise<CompanyProfile> {
     const profile = await this.profileRepo.findOne({
-      where: { userId: companyUserId },
+      where: [{ userId: companyUserId }, { id: companyUserId }],
       relations: ['locations', 'contacts', 'businessAreas'],
     });
     if (!profile) {
