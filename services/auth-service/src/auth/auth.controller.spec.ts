@@ -44,7 +44,13 @@ describe('AuthController', () => {
   // ═══════════════════════════════════════════════════════════════════
   describe('register', () => {
     it('debería delegar la creación del usuario al servicio', async () => {
-      const dto = { email: 'nuevo@udenar.edu.co', password: 'Password1!', role: UserRole.STUDENT };
+      const dto = {
+        email: 'nuevo@udenar.edu.co',
+        password: 'Password1!',
+        role: UserRole.STUDENT,
+        termsAccepted: true,
+        dataTreatmentAccepted: true,
+      };
       const expected = { message: 'ok', userId: 'uuid-1' };
       service.register.mockResolvedValue(expected);
 

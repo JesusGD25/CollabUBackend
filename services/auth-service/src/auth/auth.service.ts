@@ -76,6 +76,10 @@ export class AuthService {
       email: dto.email,
       passwordHash,
       role: dto.role,
+      termsAccepted: dto.termsAccepted ?? true,
+      termsAcceptedAt: new Date(),
+      termsVersion: 'v1.0',
+      dataTreatmentAccepted: dto.dataTreatmentAccepted ?? dto.termsAccepted ?? true,
     });
     const savedUser = await this.userRepo.save(user);
 
@@ -585,6 +589,10 @@ export class AuthService {
       role: data.role as UserRole,
       isVerified: true,   // creado por admin, no requiere verificación por email
       isActive: true,
+      termsAccepted: true,
+      termsAcceptedAt: new Date(),
+      termsVersion: 'v1.0',
+      dataTreatmentAccepted: true,
     });
     const saved = await this.userRepo.save(user);
     this.logger.log(`Usuario ${saved.id} (${saved.email}) creado por admin`);

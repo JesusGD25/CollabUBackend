@@ -73,18 +73,27 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
     ApplicationStatus.UNDER_REVIEW,
     ApplicationStatus.SHORTLISTED,
     ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.UNDER_REVIEW]: [
     ApplicationStatus.SHORTLISTED,
     ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.SHORTLISTED]: [
+    ApplicationStatus.UNDER_REVIEW,
     ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
   ],
-  [ApplicationStatus.INTERVIEW]: [ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED],
+  [ApplicationStatus.INTERVIEW]: [
+    ApplicationStatus.UNDER_REVIEW,
+    ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.ACCEPTED,
+    ApplicationStatus.REJECTED,
+  ],
   [ApplicationStatus.ACCEPTED]: [
     ApplicationStatus.PENDING_SUPERVISOR,
     ApplicationStatus.CANCELLED,
@@ -97,7 +106,9 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
     ApplicationStatus.COMPLETED,
     ApplicationStatus.CANCELLED,
   ],
-  [ApplicationStatus.REJECTED]: [],
+  [ApplicationStatus.REJECTED]: [
+    ApplicationStatus.UNDER_REVIEW,
+  ],
   [ApplicationStatus.WITHDRAWN]: [],
   [ApplicationStatus.COMPLETED]: [],
   [ApplicationStatus.CANCELLED]: [],
@@ -1243,6 +1254,10 @@ export class ApplicationService {
     }
     if (dto.status === ApplicationStatus.ACCEPTED) {
       application.acceptedAt = new Date();
+      if (!application.reviewedAt) {
+        application.reviewedAt = new Date();
+        application.reviewedBy = companyUserId;
+      }
       // Notify student that application is accepted and pending supervisor assignment
       await this.eventPublisher.publish('application.company.accepted', {
         applicationId,

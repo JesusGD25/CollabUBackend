@@ -294,6 +294,62 @@ describe('ApplicationService', () => {
       );
     });
 
+    it('debería permitir cambiar estado de PENDING a ACCEPTED directamente', async () => {
+      const app = makeApplication({ status: ApplicationStatus.PENDING });
+      const updated = makeApplication({ status: ApplicationStatus.ACCEPTED });
+      applicationRepo.findOne
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(updated);
+      applicationRepo.save.mockResolvedValue(updated);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      const result = await service.updateStatus(APP_ID, COMPANY_ID, {
+        status: ApplicationStatus.ACCEPTED,
+      });
+
+      expect(result.status).toBe(ApplicationStatus.ACCEPTED);
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'application.company.accepted',
+        expect.objectContaining({ applicationId: APP_ID }),
+        'application-service',
+      );
+    });
+
+    it('debería permitir cambiar estado de UNDER_REVIEW a ACCEPTED directamente', async () => {
+      const app = makeApplication({ status: ApplicationStatus.UNDER_REVIEW });
+      const updated = makeApplication({ status: ApplicationStatus.ACCEPTED });
+      applicationRepo.findOne
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(updated);
+      applicationRepo.save.mockResolvedValue(updated);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      const result = await service.updateStatus(APP_ID, COMPANY_ID, {
+        status: ApplicationStatus.ACCEPTED,
+      });
+
+      expect(result.status).toBe(ApplicationStatus.ACCEPTED);
+    });
+
+    it('debería permitir cambiar estado de SHORTLISTED a ACCEPTED directamente', async () => {
+      const app = makeApplication({ status: ApplicationStatus.SHORTLISTED });
+      const updated = makeApplication({ status: ApplicationStatus.ACCEPTED });
+      applicationRepo.findOne
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(updated);
+      applicationRepo.save.mockResolvedValue(updated);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      const result = await service.updateStatus(APP_ID, COMPANY_ID, {
+        status: ApplicationStatus.ACCEPTED,
+      });
+
+      expect(result.status).toBe(ApplicationStatus.ACCEPTED);
+    });
+
     it('debería lanzar BadRequestException por transición inválida', async () => {
       const app = makeApplication({ status: ApplicationStatus.REJECTED });
       applicationRepo.findOne.mockResolvedValueOnce(app);
