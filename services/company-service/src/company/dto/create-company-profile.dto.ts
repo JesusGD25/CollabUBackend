@@ -57,6 +57,12 @@ export class CreateCompanyProfileDto {
   @IsUrl()
   website?: string;
 
+  @ApiPropertyOptional({ example: 'https://cdn.example.com/logo.png' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  logoUrl?: string;
+
   @ApiPropertyOptional({ example: 2015 })
   @IsOptional()
   @IsInt()

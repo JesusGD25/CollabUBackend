@@ -42,6 +42,18 @@ export class ProjectSearchQueryDto {
   minimumSemester?: number;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  durationMin?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  durationMax?: number;
+
+  @IsOptional()
   @IsString()
   sortBy?: 'createdAt' | 'deadline' | 'views' | 'applications';
 

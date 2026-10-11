@@ -588,6 +588,88 @@ export class EvaluationService implements OnModuleInit {
     return { averageScore, completedCount: completed.length, byType };
   }
 
+  async getAnalyticsStats(params: {
+    companyId?: string;
+    studentId?: string;
+    projectId?: string;
+    from?: string;
+    to?: string;
+  }): Promise<{
+    avgOverallScore: number | null;
+    count: number;
+    byEvaluationType: Record<string, { avg: number | null; count: number }>;
+  }> {
+    const { companyId, studentId, projectId, from, to } = params;
+
+    // `Evaluation` no tiene columna `companyId` local (solo `applicationId`/
+    // `projectId`/`evaluatorId`/`evaluatedId`, según auditoría previa). Resolver
+    // companyId requeriría una consulta cruzada a company/project-service, fuera
+    // de alcance aquí. Se acepta el parámetro por compatibilidad de la firma pero
+    // no se usa para filtrar.
+    void companyId;
+
+    const qb = this.evaluationRepo
+      .createQueryBuilder('eval')
+      .where('eval.status = :status', { status: EvaluationStatus.COMPLETED });
+
+    if (projectId) {
+      qb.andWhere('eval.project_id = :projectId', { projectId });
+    }
+
+    if (studentId) {
+      qb.andWhere(
+        `(
+          (eval.evaluation_type IN (:...studentAsEvaluated) AND eval.evaluated_id = :studentId)
+          OR
+          (eval.evaluation_type IN (:...studentAsEvaluator) AND eval.evaluator_id = :studentId)
+        )`,
+        {
+          studentAsEvaluated: [
+            EvaluationType.COMPANY_EVALUATES_STUDENT,
+            EvaluationType.SUPERVISOR_EVALUATES_STUDENT,
+          ],
+          studentAsEvaluator: [
+            EvaluationType.STUDENT_EVALUATES_COMPANY,
+            EvaluationType.STUDENT_EVALUATES_SUPERVISOR,
+          ],
+          studentId,
+        },
+      );
+    }
+
+    if (from) {
+      qb.andWhere('eval.completed_at >= :from', { from: new Date(from) });
+    }
+    if (to) {
+      qb.andWhere('eval.completed_at <= :to', { to: new Date(to) });
+    }
+
+    const evaluations = await qb.getMany();
+
+    const withScore = evaluations.filter((e) => e.overallScore !== null);
+    const avgOverallScore =
+      withScore.length > 0
+        ? withScore.reduce((sum, e) => sum + Number(e.overallScore), 0) / withScore.length
+        : null;
+
+    const byEvaluationType: Record<string, { avg: number | null; count: number }> = {};
+    const types = Object.values(EvaluationType) as EvaluationType[];
+    for (const type of types) {
+      const typeEvals = evaluations.filter((e) => e.evaluationType === type);
+      const typeWithScore = typeEvals.filter((e) => e.overallScore !== null);
+      byEvaluationType[type] = {
+        avg:
+          typeWithScore.length > 0
+            ? typeWithScore.reduce((sum, e) => sum + Number(e.overallScore), 0) /
+              typeWithScore.length
+            : null,
+        count: typeEvals.length,
+      };
+    }
+
+    return { avgOverallScore, count: evaluations.length, byEvaluationType };
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // CRITERIOS
   // ──────────────────────────────────────────────────────────────────

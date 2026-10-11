@@ -4,12 +4,13 @@ import {
   Post,
   Patch,
   Param,
+  Query,
   Body,
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
 
 import { ProjectService } from './project.service';
 
@@ -17,6 +18,31 @@ import { ProjectService } from './project.service';
 @Controller('internal/projects')
 export class ProjectInternalController {
   constructor(private readonly projectService: ProjectService) {}
+
+  /**
+   * Rutas estáticas ('analytics/stats', 'skills/demand') registradas antes de las
+   * rutas con ':projectId' para que no haya ambigüedad de matching en Nest.
+   */
+  @Get('analytics/stats')
+  @ApiOperation({ summary: 'Estadísticas agregadas de proyectos para analytics-service (uso interno)' })
+  @ApiQuery({ name: 'companyId', required: false, type: 'string' })
+  @ApiQuery({ name: 'from', required: false, type: 'string', description: 'ISO date' })
+  @ApiQuery({ name: 'to', required: false, type: 'string', description: 'ISO date' })
+  @ApiResponse({ status: 200, description: 'Estadísticas agregadas de proyectos' })
+  async getAnalyticsStats(
+    @Query('companyId') companyId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.projectService.getInternalAnalyticsStats(companyId, from, to);
+  }
+
+  @Get('skills/demand')
+  @ApiOperation({ summary: 'Demanda actual de habilidades en proyectos activos (uso interno)' })
+  @ApiResponse({ status: 200, description: 'Demanda de habilidades agrupada por skill' })
+  async getSkillsDemand() {
+    return this.projectService.getInternalSkillsDemand();
+  }
 
   @Get(':projectId/matching-data')
   @ApiOperation({ summary: 'Obtener datos para matching (uso interno)' })

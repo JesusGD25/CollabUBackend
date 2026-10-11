@@ -312,6 +312,36 @@ export class MatchingService {
     return result;
   }
 
+  /**
+   * Estadísticas agregadas de MatchResult para el analytics-service (endpoint interno).
+   * `overallScore` puede ser null en algunas filas — AVG() de SQL las excluye automáticamente.
+   */
+  async getAnalyticsStats(
+    from?: string,
+    to?: string,
+  ): Promise<{ avgOverallScore: number | null; count: number }> {
+    const qb = this.resultRepo
+      .createQueryBuilder('mr')
+      .select('AVG(mr.overall_score)', 'avgOverallScore')
+      .addSelect('COUNT(*)', 'count');
+
+    if (from) {
+      qb.andWhere('mr.calculated_at >= :from', { from });
+    }
+    if (to) {
+      qb.andWhere('mr.calculated_at <= :to', { to });
+    }
+
+    const raw = await qb.getRawOne<{ avgOverallScore: string | null; count: string }>();
+
+    return {
+      avgOverallScore: raw?.avgOverallScore !== null && raw?.avgOverallScore !== undefined
+        ? parseFloat(raw.avgOverallScore)
+        : null,
+      count: raw ? parseInt(raw.count, 10) : 0,
+    };
+  }
+
   // ─── Pesos ─────────────────────────────────────────────────────────────────
 
   async getWeights(

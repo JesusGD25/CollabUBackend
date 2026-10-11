@@ -65,9 +65,12 @@ Backend/
 │   ├── auth-service/ … storage-service/
 │
 ├── scripts/
-│   ├── seed_full_up.sql             ← Seed completo de desarrollo (idempotente)
-│   ├── seed_full_down.sql           ← Rollback del seed
-│   └── Run-Seed.ps1                 ← Wrapper PowerShell para sembrar/revertir
+│   ├── seed_full_up.sql               ← Seed base (idempotente): roles, proyectos y flujo académico completo
+│   ├── seed_full_down.sql             ← Rollback del seed base
+│   ├── Run-Seed.ps1                   ← Wrapper PowerShell para sembrar/revertir el seed base
+│   ├── seed_analytics_historical.sql  ← Cohorte histórica adicional (idempotente, no toca el seed base) para series temporales de analíticas
+│   ├── seed_analytics_enrichment.sql  ← Enriquece student01-05/company01-02 con experiencia, educación, CV y proyectos completados+evaluados reales
+│   └── seed_shift_dates.sql           ← Opcional: desplaza fechas vencidas del seed base si se ejecuta mucho después del 2026-08-12
 │
 └── docker/
     ├── docker-compose.yml           ← Infraestructura: PostgreSQL + RabbitMQ + Redis
@@ -184,13 +187,41 @@ Espera a que las 14 ventanas muestren `Nest application successfully started` (l
 
 **6. Sembrar datos de desarrollo** (opcional pero muy recomendado — sin esto la plataforma arranca vacía)
 
+Hay **3 scripts de seed**, pensados para correr en este orden. Cada uno es idempotente (usa `ON CONFLICT DO NOTHING` con UUIDs fijos), así que puedes volver a correrlos sin duplicar ni corromper nada. Todos usan datos **reales y coherentes entre sí** (una aplicación referencia un proyecto y estudiante que existen, una evaluación solo existe si su proceso académico está realmente `completed`, etc.) — nunca números sueltos de relleno.
+
+**6.1 — Seed base** (obligatorio, los otros dos dependen de sus datos)
+
 ```powershell
 cd scripts
 .\Run-Seed.ps1
 cd ..
 ```
 
-Es idempotente (se puede correr varias veces sin duplicar datos) y deja sembrados todos los roles reales y proyectos/postulaciones cubriendo los estados del flujo académico. Ver la tabla completa de cuentas y escenarios en `GUIA_EJECUCION.md`, sección 8. Contraseña de **todas** las cuentas sembradas: `CollabU2026!` (solo válida en este seed de desarrollo).
+Puebla las 13 bases con todos los roles reales (admin, empresas, docentes, estudiantes) y proyectos/postulaciones cubriendo **todos** los estados del flujo académico (pending → aceptado → anteproyecto → jurados → entregables → completado, más casos cancelados/vencidos/rechazados). Ver la tabla completa de cuentas y escenarios en `GUIA_EJECUCION.md`, sección 8.
+
+**6.2 — Cohorte histórica para analíticas** (opcional, recomendado para ver series temporales y tendencias con datos reales)
+
+```powershell
+cd scripts
+docker cp seed_analytics_historical.sql collab-u-postgres:/tmp/seed_analytics_historical.sql
+docker exec -i collab-u-postgres psql -U collabu_admin -d postgres -v ON_ERROR_STOP=1 -f //tmp/seed_analytics_historical.sql
+cd ..
+```
+
+Añade una segunda tanda de empresas/estudiantes/proyectos con fechas escalonadas entre 2025-09 y 2026-08 (no toca las cuentas del seed base). Sin esto, `platform_metrics` y las tendencias de skills solo tienen el punto de "hoy" — con esto hay una serie histórica real para graficar.
+
+**6.3 — Enriquecimiento de estudiantes y empresas** (opcional, recomendado para probar `/my-analytics` y `/company-analytics` con datos completos)
+
+```powershell
+cd scripts
+docker cp seed_analytics_enrichment.sql collab-u-postgres:/tmp/seed_analytics_enrichment.sql
+docker exec -i collab-u-postgres psql -U collabu_admin -d postgres -v ON_ERROR_STOP=1 -f //tmp/seed_analytics_enrichment.sql
+cd ..
+```
+
+Requiere haber corrido 6.1 primero (usa sus IDs de `student01`-`student05` y `company01`-`company02`). Agrega experiencia laboral, educación, intereses y CV reales a esos 5 estudiantes, más una postulación completada con evaluación bidireccional real entre `student01`↔`company01` y `student02`↔`company02`. Al final recalcula `profile_completeness` de **todos** los estudiantes con la misma fórmula que usa `student-service` (no un número fijo) — sube automáticamente según los datos que cada perfil realmente tenga.
+
+Contraseña de **todas** las cuentas sembradas (los 3 scripts): `CollabU2026!` (solo válida en este seed de desarrollo).
 
 **7. Levantar el frontend**
 
@@ -232,7 +263,7 @@ Esto levanta:
 - Los 14 servicios de backend (definidos en `docker-compose.prod.yml`, `NODE_ENV=production`, sin hot-reload)
 - El frontend Angular servido por su propio Express/SSR, en el puerto **4200**
 
-Sembrar datos de desarrollo dentro de este entorno:
+Sembrar datos de desarrollo dentro de este entorno (seed base; los seeds adicionales de analíticas del paso 6.2/6.3 de arriba se aplican igual, apuntando siempre al contenedor `collab-u-postgres`):
 
 ```powershell
 cd ..\scripts

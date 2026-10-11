@@ -18,20 +18,22 @@ Microservicio para la gestión de proyectos empresariales en Collab-U. Permite a
 | Project | Proyecto principal con estado, tipo, ubicación, compensación |
 | ProjectRequirement | Requisitos del proyecto (habilidad, herramienta, idioma, etc.) |
 | ProjectDeliverable | Entregables con peso porcentual para evaluación |
-| ProjectTag | Etiquetas/tags del proyecto (único por proyecto) |
+| ProjectSkill | Habilidades requeridas por el proyecto — modelo unificado con catálogo maestro (`catalogSkillId` opcional, resuelto contra `admin_db.skill_catalog`; `name` libre cuando no resuelve). **No existe `ProjectTag`** — el modelo de tags fue migrado a `ProjectSkill` en `Backend/scripts/migrate-skills-unification.mjs` y la tabla `project_tags` fue eliminada; no reintroducir. |
 | ProjectActivity | Actividades asignables a estudiantes con seguimiento de horas |
 
 ## Enums
 
-- **ProjectType**: academic, professional, research, social, entrepreneurship
-- **ProjectStatus**: draft, published, in_progress, completed, cancelled
-- **LocationType**: remote, on_site, hybrid
-- **CompensationType**: paid, unpaid, academic_credit, mixed
+- **ProjectType**: `internship`, `professional_practice`, `thesis`, `research`, `other`
+- **ProjectStatus**: `draft`, `needs_changes`, `pending_approval`, `published`, `in_progress`, `completed`, `cancelled`
+- **LocationType**: `remote`, `onsite`, `hybrid`
+- **CompensationType**: `paid`, `unpaid`, `academic_credit`, `stipend`
 - **RequirementType**: skill, tool, language, certification, academic, other
 - **ActivityStatus**: pending, in_progress, completed, blocked
 - **ActivityPriority**: low, medium, high, critical
 
-## Endpoints Públicos (23)
+## Endpoints Públicos
+
+> Nota: esta tabla no incluye los endpoints de `ProjectSkill` (skills del proyecto, modelo unificado con catálogo — ver sección Entidades) ni los de revisión de faculty/admin (`reviewProject`) — pendiente de auditoría completa de este README, fuera del alcance de la corrección de FASE 7 de `PLANNING_ANALYTICS_SERVICE.md` (que solo corrigió los remanentes de tags y los enums obsoletos).
 
 | Método | Ruta | Descripción | Auth |
 |---|---|---|---|
@@ -49,9 +51,6 @@ Microservicio para la gestión de proyectos empresariales en Collab-U. Permite a
 | GET | /:id/deliverables | Listar entregables | JWT |
 | POST | /:id/deliverables | Agregar entregable | COMPANY |
 | DELETE | /:id/deliverables/:deliverableId | Eliminar entregable | COMPANY |
-| GET | /:id/tags | Listar tags | JWT |
-| POST | /:id/tags | Agregar tag | COMPANY |
-| DELETE | /:id/tags/:tagId | Eliminar tag | COMPANY |
 | GET | /:id/activities | Listar actividades | JWT |
 | POST | /:id/activities | Crear actividad | COMPANY |
 | PATCH | /:id/activities/:activityId | Actualizar actividad | COMPANY |
@@ -59,18 +58,24 @@ Microservicio para la gestión de proyectos empresariales en Collab-U. Permite a
 | GET | /stats/overview | Estadísticas generales | COMPANY |
 | POST | /:id/views | Incrementar vistas | JWT |
 
-## Endpoints Internos (3)
+## Endpoints Internos
+
+> Lista no exhaustiva — corregida solo para agregar los 2 endpoints de analítica agregados en FASE2/3 de `PLANNING_ANALYTICS_SERVICE.md`. El resto de esta tabla no fue reauditado.
 
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | /internal/projects/:id/matching-data | Datos para matching |
 | GET | /internal/projects/:id/exists | Verificar existencia |
 | PATCH | /internal/projects/:id/increment-applications | Incrementar contador |
+| GET | /internal/projects/analytics/stats | Estadísticas agregadas (totales, por status, activos) — consumido por analytics-service |
+| GET | /internal/projects/skills/demand | Demanda de skills agregada por `catalogSkillId`/nombre, desde proyectos activos — consumido por analytics-service |
 
 ## Máquina de Estados
 
 ```
-draft → published (requiere al menos 1 requirement)
+draft → pending_approval | cancelled
+needs_changes → pending_approval | cancelled
+pending_approval → published | needs_changes | draft   (revisión de faculty/admin)
 published → in_progress | cancelled
 in_progress → completed | cancelled
 completed → (terminal)

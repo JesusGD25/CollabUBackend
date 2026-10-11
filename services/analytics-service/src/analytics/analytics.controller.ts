@@ -5,9 +5,11 @@ import {
   Body,
   Param,
   Query,
+  Res,
   UseGuards,
   ParseUUIDPipe,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -24,6 +26,7 @@ import {
 
 import { AnalyticsService } from './analytics.service';
 import { MetricsQueryDto, GenerateReportDto } from './dto';
+import { buildReportPdf } from './pdf/report-pdf.builder';
 
 @ApiTags('Analytics')
 @ApiBearerAuth()
@@ -47,6 +50,21 @@ export class AnalyticsController {
   async getAcademicKpis() {
     const [assignmentStats, academicStats] = await this.analyticsService.getAcademicKpis();
     return { assignmentStats, academicStats };
+  }
+
+  @Post('aggregate/run')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Fuerza la agregación diaria fuera de horario (operación manual, además del cron de la 1am)' })
+  async runAggregationNow() {
+    await this.analyticsService.runDailyAggregation();
+    return { message: 'Agregación ejecutada' };
+  }
+
+  @Post('aggregate/run-historical')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Backfill de platform_metrics para un conjunto de fechas históricas (FASE 5 — seed histórico)' })
+  async runHistoricalAggregation(@Body() body: { dates: string[] }) {
+    return this.analyticsService.runHistoricalAggregation(body.dates ?? []);
   }
 
   // ─── Platform Metrics ────────────────────────────────────────────────────────
@@ -158,6 +176,19 @@ export class AnalyticsController {
   @ApiOperation({ summary: 'Listar reportes generados' })
   getReports(@Query() query: MetricsQueryDto) {
     return this.analyticsService.getReports(query);
+  }
+
+  @Get('reports/:id/pdf')
+  @Roles(UserRole.ADMIN, UserRole.FACULTY)
+  @ApiOperation({ summary: 'Descargar un reporte generado como PDF' })
+  async downloadReportPdf(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const report = await this.analyticsService.getReport(id);
+    const doc = buildReportPdf(report);
+    const filename = `reporte-${report.reportType}-${report.id}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    doc.pipe(res);
+    doc.end();
   }
 
   @Get('reports/:id')

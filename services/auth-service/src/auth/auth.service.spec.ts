@@ -58,6 +58,10 @@ function createMockUser(overrides: Partial<User> = {}): User {
     lockedUntil: null,
     lastLogin: null,
     passwordChangedAt: null,
+    termsAccepted: true,
+    termsAcceptedAt: new Date(),
+    termsVersion: 'v1.0',
+    dataTreatmentAccepted: true,
     createdAt: new Date(),
     updatedAt: new Date(),
     refreshTokens: [],
@@ -104,9 +108,15 @@ describe('AuthService', () => {
   // REGISTER
   // ═══════════════════════════════════════════════════════════════════
   describe('register', () => {
-    const dto = { email: 'nuevo@udenar.edu.co', password: 'Password1!', role: UserRole.STUDENT };
+    const dto = {
+      email: 'nuevo@udenar.edu.co',
+      password: 'Password1!',
+      role: UserRole.STUDENT,
+      termsAccepted: true,
+      dataTreatmentAccepted: true,
+    };
 
-    it('debería registrar un nuevo usuario exitosamente', async () => {
+    it('debería registrar un nuevo usuario exitosamente con términos y tratamiento de datos', async () => {
       userRepo.findOne.mockResolvedValue(null); // email no existe
       userRepo.create.mockReturnValue({ id: 'new-id', email: dto.email, role: dto.role } as User);
       userRepo.save.mockResolvedValue({ id: 'new-id', email: dto.email, role: dto.role } as User);
@@ -118,12 +128,46 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('userId', 'new-id');
       expect(result).toHaveProperty('message');
       expect(userRepo.create).toHaveBeenCalledWith(
-        expect.objectContaining({ email: dto.email, role: dto.role }),
+        expect.objectContaining({
+          email: dto.email,
+          role: dto.role,
+          termsAccepted: true,
+          termsVersion: 'v1.0',
+          dataTreatmentAccepted: true,
+          termsAcceptedAt: expect.any(Date),
+        }),
       );
       expect(mockEventPublisher.publish).toHaveBeenCalledWith(
         'auth.user.created',
         expect.objectContaining({ userId: 'new-id', email: dto.email, role: dto.role }),
         'auth-service',
+      );
+    });
+
+    it('debería asignar dataTreatmentAccepted si solo se envía termsAccepted: true', async () => {
+      userRepo.findOne.mockResolvedValue(null);
+      userRepo.create.mockReturnValue({ id: 'new-id', email: dto.email, role: dto.role } as User);
+      userRepo.save.mockResolvedValue({ id: 'new-id', email: dto.email, role: dto.role } as User);
+      verificationTokenRepo.create.mockReturnValue({} as VerificationToken);
+      verificationTokenRepo.save.mockResolvedValue({} as VerificationToken);
+
+      const singleConsentDto = {
+        email: 'nuevo2@udenar.edu.co',
+        password: 'Password1!',
+        role: UserRole.COMPANY,
+        termsAccepted: true,
+      };
+
+      await service.register(singleConsentDto as any);
+
+      expect(userRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: singleConsentDto.email,
+          termsAccepted: true,
+          dataTreatmentAccepted: true,
+          termsVersion: 'v1.0',
+          termsAcceptedAt: expect.any(Date),
+        }),
       );
     });
 

@@ -4,6 +4,7 @@ export type ReportType =
   | 'period_summary'
   | 'company_performance'
   | 'student_outcomes'
+  | 'supervisor_report'
   | 'skill_gap_analysis'
   | 'matching_effectiveness'
   | 'academic_process_summary'
@@ -29,6 +30,12 @@ export class Report {
 
   @Column({ name: 'period_id', type: 'uuid', nullable: true })
   periodId: string | null;
+
+  /** userId de la empresa/estudiante, o Supervisor.id del docente, cuando el reporte es sobre
+   * UNA entidad puntual (company_performance/student_outcomes/supervisor_report) — null para
+   * los reportes agregados de plataforma. */
+  @Column({ name: 'entity_id', type: 'uuid', nullable: true })
+  entityId: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
   parameters: Record<string, any> | null;

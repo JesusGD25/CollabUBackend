@@ -41,6 +41,18 @@ export class User {
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive: boolean;
 
+  @Column({ name: 'terms_accepted', type: 'boolean', default: false })
+  termsAccepted: boolean;
+
+  @Column({ name: 'terms_accepted_at', type: 'timestamptz', nullable: true })
+  termsAcceptedAt: Date | null;
+
+  @Column({ name: 'terms_version', type: 'varchar', length: 20, default: 'v1.0' })
+  termsVersion: string;
+
+  @Column({ name: 'data_treatment_accepted', type: 'boolean', default: false })
+  dataTreatmentAccepted: boolean;
+
   @Column({ name: 'failed_login_attempts', type: 'integer', default: 0 })
   failedLoginAttempts: number;
 

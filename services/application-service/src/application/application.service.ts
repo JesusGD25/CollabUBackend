@@ -73,18 +73,27 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
     ApplicationStatus.UNDER_REVIEW,
     ApplicationStatus.SHORTLISTED,
     ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.UNDER_REVIEW]: [
     ApplicationStatus.SHORTLISTED,
     ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
   ],
   [ApplicationStatus.SHORTLISTED]: [
+    ApplicationStatus.UNDER_REVIEW,
     ApplicationStatus.INTERVIEW,
+    ApplicationStatus.ACCEPTED,
     ApplicationStatus.REJECTED,
   ],
-  [ApplicationStatus.INTERVIEW]: [ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED],
+  [ApplicationStatus.INTERVIEW]: [
+    ApplicationStatus.UNDER_REVIEW,
+    ApplicationStatus.SHORTLISTED,
+    ApplicationStatus.ACCEPTED,
+    ApplicationStatus.REJECTED,
+  ],
   [ApplicationStatus.ACCEPTED]: [
     ApplicationStatus.PENDING_SUPERVISOR,
     ApplicationStatus.CANCELLED,
@@ -97,7 +106,9 @@ const STATUS_TRANSITIONS: Record<ApplicationStatus, ApplicationStatus[]> = {
     ApplicationStatus.COMPLETED,
     ApplicationStatus.CANCELLED,
   ],
-  [ApplicationStatus.REJECTED]: [],
+  [ApplicationStatus.REJECTED]: [
+    ApplicationStatus.UNDER_REVIEW,
+  ],
   [ApplicationStatus.WITHDRAWN]: [],
   [ApplicationStatus.COMPLETED]: [],
   [ApplicationStatus.CANCELLED]: [],
@@ -1137,6 +1148,7 @@ export class ApplicationService {
     await this.applicationRepo.save(application);
 
     await this.instantiateProjectDeliverables(applicationId);
+    await this.discardOtherActiveApplications(application.studentId, applicationId);
 
     if (supervisorAssignmentId) {
       const existingRecord = await this.academicRecordRepo.findOne({ where: { applicationId } });
@@ -1242,6 +1254,10 @@ export class ApplicationService {
     }
     if (dto.status === ApplicationStatus.ACCEPTED) {
       application.acceptedAt = new Date();
+      if (!application.reviewedAt) {
+        application.reviewedAt = new Date();
+        application.reviewedBy = companyUserId;
+      }
       // Notify student that application is accepted and pending supervisor assignment
       await this.eventPublisher.publish('application.company.accepted', {
         applicationId,
@@ -1841,6 +1857,71 @@ export class ApplicationService {
           'system',
           'Cuenta de usuario desactivada',
         );
+      }
+    }
+  }
+
+  /**
+   * EST-04: cuando una postulación del estudiante inicia formalmente (IN_PROGRESS, asesor
+   * aceptó), el resto de sus postulaciones activas en OTROS proyectos ya no tienen sentido
+   * (D1: el estudiante solo puede tener un proceso académico en curso). Se retiran como
+   * `WITHDRAWN` (D3: no es un rechazo de la empresa, es un retiro por el sistema) y se
+   * notifica al estudiante. Mismo patrón que `withdrawAllByStudent`.
+   */
+  private async discardOtherActiveApplications(studentId: string, exceptApplicationId: string): Promise<void> {
+    const activeStatuses: ApplicationStatus[] = [
+      ApplicationStatus.PENDING,
+      ApplicationStatus.UNDER_REVIEW,
+      ApplicationStatus.SHORTLISTED,
+      ApplicationStatus.INTERVIEW,
+    ];
+
+    for (const status of activeStatuses) {
+      const apps = await this.applicationRepo.find({ where: { studentId, status } });
+
+      for (const app of apps) {
+        if (app.id === exceptApplicationId) continue;
+
+        app.status = ApplicationStatus.WITHDRAWN;
+        app.withdrawalReason = 'Retirada automáticamente: iniciaste otro proceso académico';
+        await this.applicationRepo.save(app);
+
+        await this.addTimelineEntry(
+          app.id,
+          status,
+          ApplicationStatus.WITHDRAWN,
+          'system',
+          'Retirada automáticamente al iniciar otro proceso académico',
+        );
+
+        // Mismo shape enriquecido que `updateStatus` (línea ~1287): Notification Service
+        // solo dispara la notificación al estudiante con los alias `status`/`studentUserId`.
+        let projectTitleForEvent: string | null = null;
+        try {
+          const projectInfo = await this.httpClient.get<{ title: string | null }>(
+            'project',
+            `/internal/projects/${app.projectId}/exists`,
+          );
+          projectTitleForEvent = projectInfo?.title ?? null;
+        } catch (err) {
+          this.logger.warn(
+            `No se pudo enriquecer evento de auto-retiro con datos del proyecto ${app.projectId}: ${err.message}`,
+          );
+        }
+
+        await this.eventPublisher.publish('application.status.changed', {
+          applicationId: app.id,
+          projectId: app.projectId,
+          studentId,
+          previousStatus: status,
+          newStatus: ApplicationStatus.WITHDRAWN,
+          changedBy: 'system',
+          status: ApplicationStatus.WITHDRAWN,
+          studentUserId: studentId,
+          projectTitle: projectTitleForEvent,
+        }, 'application-service');
+
+        this.logger.log(`Postulación ${app.id} auto-retirada (${status} → withdrawn) al iniciar ${exceptApplicationId}`);
       }
     }
   }
@@ -2848,6 +2929,93 @@ export class ApplicationService {
         ? Math.round((durationsDays.reduce((sum, d) => sum + d, 0) / durationsDays.length) * 100) / 100
         : null,
       avgAnteproyectoCorrections: avgCorrections !== null ? Math.round(avgCorrections * 100) / 100 : null,
+    };
+  }
+
+  /**
+   * Estadísticas agregadas de postulaciones para analytics-service (uso interno).
+   * `companyId` no se filtra aquí porque `Application` no almacena companyId
+   * directamente (solo `projectId`); la resolución companyId → projectIds se
+   * hace un nivel arriba, en analytics-service, vía project-service.
+   */
+  async getApplicationAnalyticsStats(filters: {
+    projectId?: string;
+    studentId?: string;
+    from?: string;
+    to?: string;
+  }): Promise<{
+    total: number;
+    byStatus: Record<string, number>;
+    avgTimeToDecisionHours: number | null;
+    acceptedCount: number;
+    rejectedCount: number;
+  }> {
+    const { projectId, studentId, from, to } = filters;
+
+    const baseQuery = this.applicationRepo.createQueryBuilder('application');
+    if (projectId) baseQuery.andWhere('application.project_id = :projectId', { projectId });
+    if (studentId) baseQuery.andWhere('application.student_id = :studentId', { studentId });
+    if (from) baseQuery.andWhere('application.applied_at >= :from', { from });
+    if (to) baseQuery.andWhere('application.applied_at <= :to', { to });
+
+    const total = await baseQuery.clone().getCount();
+
+    const statusRows = await baseQuery
+      .clone()
+      .select('application.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('application.status')
+      .getRawMany<{ status: ApplicationStatus; count: string }>();
+
+    const byStatus: Record<string, number> = {};
+    for (const row of statusRows) {
+      byStatus[row.status] = parseInt(row.count, 10);
+    }
+
+    const avgRow = await baseQuery
+      .clone()
+      .innerJoin(
+        ApplicationTimeline,
+        'decision_timeline',
+        'decision_timeline.application_id = application.id AND decision_timeline.to_status IN (:...decisionStatuses) AND decision_timeline.created_at = (' +
+          'SELECT MIN(t2.created_at) FROM application_timeline t2 ' +
+          "WHERE t2.application_id = application.id AND t2.to_status IN (:...decisionStatuses))",
+        { decisionStatuses: [ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED] },
+      )
+      .select(
+        'AVG(EXTRACT(EPOCH FROM (decision_timeline.created_at - application.applied_at)) / 3600)',
+        'avgHours',
+      )
+      .getRawOne<{ avgHours: string | null }>();
+
+    const avgTimeToDecisionHours =
+      avgRow?.avgHours != null ? Math.round(parseFloat(avgRow.avgHours) * 100) / 100 : null;
+
+    // acceptedCount = aplicaciones que ALGUNA VEZ llegaron a 'accepted', no solo las que están
+    // ahí mismo hoy. `Application.status` es un único valor sobrescrito (sin historial propio,
+    // ver auditoría §4.3 del planning) — una aplicación aceptada y luego avanzada a in_progress/
+    // completed ya no aparece en byStatus['accepted'], pero SÍ fue una conversión real. Se cuenta
+    // desde application_timeline (auditoría real, un registro por transición) para no subcontar
+    // conversiones exitosas — bug detectado en FASE 6 verificando un proyecto con 1 aplicación
+    // completada: el reporte mostraba 0 aceptadas y 0% de conversión pese a la conversión real.
+    const acceptedEverQuery = baseQuery
+      .clone()
+      .innerJoin(
+        ApplicationTimeline,
+        'accept_timeline',
+        'accept_timeline.application_id = application.id AND accept_timeline.to_status = :acceptedStatus',
+        { acceptedStatus: ApplicationStatus.ACCEPTED },
+      )
+      .select('COUNT(DISTINCT application.id)', 'count');
+    const acceptedEverRow = await acceptedEverQuery.getRawOne<{ count: string }>();
+    const acceptedCount = parseInt(acceptedEverRow?.count ?? '0', 10);
+
+    return {
+      total,
+      byStatus,
+      avgTimeToDecisionHours,
+      acceptedCount,
+      rejectedCount: byStatus[ApplicationStatus.REJECTED] ?? 0,
     };
   }
 

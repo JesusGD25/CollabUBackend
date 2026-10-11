@@ -16,6 +16,18 @@ export class AuthUserDto {
 
   @Expose()
   isActive: boolean;
+
+  @Expose()
+  termsAccepted?: boolean;
+
+  @Expose()
+  termsAcceptedAt?: Date;
+
+  @Expose()
+  termsVersion?: string;
+
+  @Expose()
+  dataTreatmentAccepted?: boolean;
 }
 
 export class AuthResponseDto {

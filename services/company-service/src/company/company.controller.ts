@@ -78,6 +78,26 @@ export class CompanyController {
     return this.companyService.updateProfile(user.userId, dto);
   }
 
+  @Post('profile/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Actualizar logo de la empresa' })
+  @ApiResponse({ status: 200, description: 'Logo actualizado' })
+  async updateLogo(@CurrentUser() user: any, @Body('logoUrl') logoUrl: string) {
+    return this.companyService.updateProfile(user.userId, { logoUrl });
+  }
+
+  @Delete('profile/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Eliminar logo de la empresa' })
+  @ApiResponse({ status: 200, description: 'Logo eliminado' })
+  async deleteLogo(@CurrentUser() user: any) {
+    return this.companyService.updateProfile(user.userId, { logoUrl: null as any });
+  }
+
   @Get('search')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

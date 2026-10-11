@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { MatchingService } from './matching.service';
 import { CalculateMatchDto, BatchCalculateMatchDto } from './dto';
@@ -37,5 +37,15 @@ export class MatchingInternalController {
   async batchCalculate(@Body() dto: BatchCalculateMatchDto) {
     this.logger.log(`Batch calculate para proyecto=${dto.projectId}, students=${dto.studentIds?.length ?? 'todos'}`);
     return this.matchingService.batchCalculate(dto);
+  }
+
+  /**
+   * Llamado por Analytics Service para obtener estadísticas pre-agregadas de matching.
+   */
+  @Get('analytics/stats')
+  @ApiOperation({ summary: 'Estadísticas agregadas de matching (llamado por Analytics Service)' })
+  @ApiResponse({ status: 200, description: 'Estadísticas calculadas exitosamente' })
+  async getAnalyticsStats(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.matchingService.getAnalyticsStats(from, to);
   }
 }

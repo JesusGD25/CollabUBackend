@@ -8,6 +8,7 @@ export const databaseConfig = (): TypeOrmModuleOptions => ({
   password: process.env.DATABASE_PASSWORD || 'collabu_secret_2025',
   database: process.env.DATABASE_NAME || 'auth_db',
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
+  migrations: [__dirname + '/../migrations/*{.ts,.js}'],
   synchronize: process.env.NODE_ENV !== 'production',
   logging: process.env.NODE_ENV === 'development',
 });

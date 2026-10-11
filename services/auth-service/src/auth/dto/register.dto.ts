@@ -1,7 +1,9 @@
 import {
+  Equals,
+  IsBoolean,
   IsEmail,
   IsEnum,
-  IsNotEmpty,
+  IsOptional,
   IsString,
   Matches,
   MaxLength,
@@ -34,4 +36,23 @@ export class RegisterDto {
     message: 'El rol debe ser: student, company, admin o faculty',
   })
   role: UserRole;
+
+  @ApiProperty({
+    description: 'Indica si el usuario aceptó los términos y condiciones',
+    example: true,
+  })
+  @IsBoolean({ message: 'El campo termsAccepted debe ser un booleano' })
+  @Equals(true, { message: 'Debe aceptar los Términos y Condiciones para registrarse' })
+  termsAccepted: boolean;
+
+  @ApiProperty({
+    description: 'Indica si el usuario autorizó el tratamiento de datos personales',
+    example: true,
+    required: false,
+  })
+  @IsOptional()
+  @IsBoolean({ message: 'El campo dataTreatmentAccepted debe ser un booleano' })
+  @Equals(true, { message: 'Debe autorizar el Tratamiento de Datos Personales para registrarse' })
+  dataTreatmentAccepted?: boolean;
 }
+
