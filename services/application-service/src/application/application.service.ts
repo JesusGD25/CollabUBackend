@@ -277,7 +277,21 @@ export class ApplicationService {
       }
     }
 
-    // 2. Evitar postulación duplicada (UNIQUE constraint como backup)
+    // 2. Verificar que el estudiante no tenga ya un proyecto activo asignado
+    const activeProjectApp = await this.applicationRepo.findOne({
+      where: [
+        { studentId, status: ApplicationStatus.ACCEPTED },
+        { studentId, status: ApplicationStatus.PENDING_SUPERVISOR },
+        { studentId, status: ApplicationStatus.IN_PROGRESS },
+      ],
+    });
+    if (activeProjectApp) {
+      throw new BadRequestException(
+        'Ya tienes un proyecto activo asignado. No es posible postularte a nuevas convocatorias.',
+      );
+    }
+
+    // 3. Evitar postulación duplicada (UNIQUE constraint como backup)
     const existing = await this.applicationRepo.findOne({
       where: { projectId: dto.projectId, studentId },
     });
@@ -1258,6 +1272,9 @@ export class ApplicationService {
         application.reviewedAt = new Date();
         application.reviewedBy = companyUserId;
       }
+      // Cancelar/retirar en cascada las demás postulaciones activas del estudiante
+      await this.discardOtherActiveApplications(application.studentId, applicationId);
+
       // Notify student that application is accepted and pending supervisor assignment
       await this.eventPublisher.publish('application.company.accepted', {
         applicationId,
@@ -1878,6 +1895,7 @@ export class ApplicationService {
 
     for (const status of activeStatuses) {
       const apps = await this.applicationRepo.find({ where: { studentId, status } });
+      if (!apps || !Array.isArray(apps)) continue;
 
       for (const app of apps) {
         if (app.id === exceptApplicationId) continue;
@@ -1885,6 +1903,17 @@ export class ApplicationService {
         app.status = ApplicationStatus.WITHDRAWN;
         app.withdrawalReason = 'Retirada automáticamente: iniciaste otro proceso académico';
         await this.applicationRepo.save(app);
+
+        // Cancelar entrevistas programadas de la postulación retirada
+        const scheduledInterviews = await this.interviewRepo.find({
+          where: { applicationId: app.id, status: InterviewStatus.SCHEDULED },
+        });
+        if (Array.isArray(scheduledInterviews)) {
+          for (const interview of scheduledInterviews) {
+            interview.status = InterviewStatus.CANCELLED;
+            await this.interviewRepo.save(interview);
+          }
+        }
 
         await this.addTimelineEntry(
           app.id,
