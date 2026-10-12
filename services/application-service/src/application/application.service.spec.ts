@@ -210,6 +210,7 @@ describe('ApplicationService', () => {
     it('debería crear una postulación exitosamente', async () => {
       const app = makeApplication();
       applicationRepo.findOne
+        .mockResolvedValueOnce(null) // no active project
         .mockResolvedValueOnce(null) // no duplicate
         .mockResolvedValueOnce(app); // findApplicationById
       applicationRepo.create.mockReturnValue(app);
@@ -245,8 +246,17 @@ describe('ApplicationService', () => {
       );
     });
 
-    it('debería lanzar ConflictException si ya existe una postulación', async () => {
-      applicationRepo.findOne.mockResolvedValueOnce(makeApplication());
+    it('debería lanzar BadRequestException si el estudiante ya tiene un proyecto activo asignado', async () => {
+      applicationRepo.findOne.mockResolvedValueOnce(makeApplication({ status: ApplicationStatus.ACCEPTED }));
+      await expect(service.createApplication(STUDENT_ID, dto)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('debería lanzar ConflictException si ya existe una postulación para el mismo proyecto', async () => {
+      applicationRepo.findOne
+        .mockResolvedValueOnce(null) // no active project
+        .mockResolvedValueOnce(makeApplication()); // duplicate for this project
       await expect(service.createApplication(STUDENT_ID, dto)).rejects.toThrow(
         ConflictException,
       );
@@ -256,8 +266,9 @@ describe('ApplicationService', () => {
       mockHttpClient.post.mockRejectedValue(new Error('Service unavailable'));
       const app = makeApplication({ matchScore: null });
       applicationRepo.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(app);
+        .mockResolvedValueOnce(null) // no active project
+        .mockResolvedValueOnce(null) // no duplicate
+        .mockResolvedValueOnce(app); // findApplicationById
       applicationRepo.create.mockReturnValue(app);
       applicationRepo.save.mockResolvedValue(app);
       timelineRepo.create.mockReturnValue({});
