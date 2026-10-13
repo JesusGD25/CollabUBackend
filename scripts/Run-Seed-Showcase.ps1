@@ -20,11 +20,14 @@
          contenedor (con Docker, storage-service no lee del disco del host).
       4. Refresca las fechas de cierre de convocatorias del seed base.
       5. Aplica seed_analytics_enrichment.sql (datos de las cuentas demo principales).
-      6. Dispara la agregacion de analitica (backfill mensual + semanal + diaria),
-         porque analytics_db NUNCA se llena por INSERT directo.
+      6. Calcula el match score de TODAS las postulaciones con matching-service
+         (seed-match-scores.mjs): llena applications.match_score y match_results.
+      7. Dispara la agregacion de analitica (backfill mensual + semanal + diaria),
+         porque analytics_db NUNCA se llena por INSERT directo. Tambien crea un snapshot
+         "de ayer" de skills (seed_skill_trends_history.sql) para que la tendencia se vea.
 
     Requisitos: seed base cargado (Run-Seed.ps1) y servicios corriendo
-    (el paso 6 necesita el api-gateway y analytics-service).
+    (el paso 6 necesita matching-service y el 7 el api-gateway y analytics-service).
 
 .PARAMETER PublicApiUrl
     URL publica del api-gateway tal como la ve el NAVEGADOR (se guarda en los links
@@ -50,7 +53,8 @@ param (
     [string]$GatewayUrl = "",
     [string]$Today = "",
     [switch]$SkipAnalytics,
-    [switch]$SkipEnrichment
+    [switch]$SkipEnrichment,
+    [switch]$SkipMatching
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,7 +97,7 @@ if ($status -ne "true") {
 }
 
 # -- 1. Generar SQL + archivos ------------------------------------------------
-Write-Host "[1/6] Generando el seed showcase (lee los catalogos reales de la BD)..." -ForegroundColor Green
+Write-Host "[1/7] Generando el seed showcase (lee los catalogos reales de la BD)..." -ForegroundColor Green
 $SqlPath = Join-Path $ScriptDir "seed_showcase.sql"
 $storageStatus = docker inspect -f '{{.State.Running}}' $StorageContainer 2>&1
 $StorageRunning = ($storageStatus -eq "true")
@@ -115,12 +119,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # -- 2. Aplicar SQL -----------------------------------------------------------
-Write-Host "[2/6] Aplicando el SQL (idempotente)..." -ForegroundColor Green
+Write-Host "[2/7] Aplicando el SQL (idempotente)..." -ForegroundColor Green
 Invoke-SqlFile -LocalPath $SqlPath -Label "seed_showcase.sql"
 
 # -- 3. Archivos fisicos ------------------------------------------------------
 if ($StorageRunning) {
-    Write-Host "[3/6] Copiando los PDF al contenedor $StorageContainer..." -ForegroundColor Green
+    Write-Host "[3/7] Copiando los PDF al contenedor $StorageContainer..." -ForegroundColor Green
     docker exec -i $StorageContainer mkdir -p /app/uploads | Out-Null
     docker cp "$UploadStage/." "${StorageContainer}:/app/uploads/"
     if ($LASTEXITCODE -ne 0) {
@@ -129,24 +133,38 @@ if ($StorageRunning) {
     }
     Remove-Item -Recurse -Force $UploadStage -ErrorAction SilentlyContinue
 } else {
-    Write-Host "[3/6] storage-service no esta dockerizado: los PDF ya quedaron en su carpeta uploads local." -ForegroundColor DarkGray
+    Write-Host "[3/7] storage-service no esta dockerizado: los PDF ya quedaron en su carpeta uploads local." -ForegroundColor DarkGray
 }
 
 # -- 4. Refresco de fechas del seed base --------------------------------------
-Write-Host "[4/6] Refrescando cierres de convocatorias del seed base..." -ForegroundColor Green
+Write-Host "[4/7] Refrescando cierres de convocatorias del seed base..." -ForegroundColor Green
 Invoke-SqlFile -LocalPath (Join-Path $ScriptDir "seed_refresh_dates.sql") -Label "seed_refresh_dates.sql"
 
 # -- 5. Enrichment de cuentas demo --------------------------------------------
 if (-Not $SkipEnrichment) {
-    Write-Host "[5/6] Aplicando seed_analytics_enrichment.sql (cuentas demo principales)..." -ForegroundColor Green
+    Write-Host "[5/7] Aplicando seed_analytics_enrichment.sql (cuentas demo principales)..." -ForegroundColor Green
     Invoke-SqlFile -LocalPath (Join-Path $ScriptDir "seed_analytics_enrichment.sql") -Label "seed_analytics_enrichment.sql"
 } else {
-    Write-Host "[5/6] Enrichment omitido (-SkipEnrichment)." -ForegroundColor DarkGray
+    Write-Host "[5/7] Enrichment omitido (-SkipEnrichment)." -ForegroundColor DarkGray
 }
 
-# -- 6. Agregacion de analitica -----------------------------------------------
+# -- 6. Match scores ----------------------------------------------------------
+# Las postulaciones se insertan directo en la BD (sin pasar por application-service, que es
+# quien calcula el score al postular). Aqui se calcula con el algoritmo real de matching-service.
+if (-Not $SkipMatching) {
+    Write-Host "[6/7] Calculando match score de las postulaciones (matching-service)..." -ForegroundColor Green
+    node (Join-Path $ScriptDir "seed-match-scores.mjs") --container $ContainerName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "No se pudieron calcular los match score (el seed SI quedo cargado)." -ForegroundColor Yellow
+        Write-Host "Reintenta con: node scripts/seed-match-scores.mjs  (requiere matching-service corriendo)." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[6/7] Match scores omitidos (-SkipMatching)." -ForegroundColor DarkGray
+}
+
+# -- 7. Agregacion de analitica -----------------------------------------------
 if (-Not $SkipAnalytics) {
-    Write-Host "[6/6] Ejecutando la agregacion de analitica (backfill + diaria)..." -ForegroundColor Green
+    Write-Host "[7/7] Ejecutando la agregacion de analitica (backfill + diaria)..." -ForegroundColor Green
     try {
         $loginBody = @{ email = "admin01@collabu.dev"; password = "CollabU2026!" } | ConvertTo-Json -Compress
         $login = Invoke-RestMethod -Method Post -Uri "$GatewayUrl/api/v1/auth/login" -ContentType "application/json" -Body $loginBody -TimeoutSec 60
@@ -163,13 +181,16 @@ if (-Not $SkipAnalytics) {
         Write-Host "      backfill historico: $($hist.written) snapshots" -ForegroundColor DarkGray
         Invoke-RestMethod -Method Post -Uri "$GatewayUrl/api/v1/analytics/aggregate/run" -Headers $headers -TimeoutSec 120 | Out-Null
         Write-Host "      agregacion diaria ejecutada" -ForegroundColor DarkGray
+        # La tendencia de skills compara contra el snapshot de ayer: se crea uno minimo para la demo.
+        Invoke-SqlFile -LocalPath (Join-Path $ScriptDir "seed_skill_trends_history.sql") -Label "seed_skill_trends_history.sql"
+        Write-Host "      tendencias de skills con historial minimo" -ForegroundColor DarkGray
     } catch {
         Write-Host "No se pudo ejecutar la agregacion de analitica: $($_.Exception.Message)" -ForegroundColor Yellow
         Write-Host "El seed SI quedo cargado. Puedes dispararla luego (login admin01 y POST /api/v1/analytics/aggregate/run-historical y /aggregate/run)," -ForegroundColor Yellow
         Write-Host "o esperar al cron diario de la 1 AM. Para omitir este paso: -SkipAnalytics." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[6/6] Analitica omitida (-SkipAnalytics)." -ForegroundColor DarkGray
+    Write-Host "[7/7] Analitica omitida (-SkipAnalytics)." -ForegroundColor DarkGray
 }
 
 Write-Host ""

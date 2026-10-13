@@ -203,7 +203,7 @@ describe('ApplicationService', () => {
         status: 'published',
         companyId: COMPANY_ID,
       });
-      mockHttpClient.post.mockResolvedValue({ overallScore: 85.5 });
+      mockHttpClient.post.mockResolvedValue({ studentId: STUDENT_ID, projectId: PROJECT_ID, score: 85.5 });
       mockHttpClient.patch.mockResolvedValue(undefined);
     });
 

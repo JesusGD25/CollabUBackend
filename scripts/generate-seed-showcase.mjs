@@ -66,7 +66,9 @@ const TODAY_STR = arg('--today', localToday());
 // ───────────────────────────── Utilidades ─────────────────────────────
 const uid = (key) => {
   const h = createHash('sha1').update(`collabu-showcase:${key}`).digest('hex');
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  // Formato UUID v4 (versión 4, variante a): varios DTO validan con @IsUUID('4')
+  // (p. ej. chat-service) y rechazarían ids con versión 5.
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 };
 
 // Colombia = UTC-5 todo el año (sin horario de verano).
@@ -120,7 +122,7 @@ function ins(db, table, cols, rows) {
 // `files` se actualiza al re-ejecutar: así correr el seed en otro entorno (otra ruta de
 // uploads, p. ej. /app/uploads en Docker) corrige storage_path en vez de dejar la vieja.
 const CONFLICT = {
-  files: 'ON CONFLICT (id) DO UPDATE SET storage_path = EXCLUDED.storage_path, file_size_bytes = EXCLUDED.file_size_bytes, updated_at = EXCLUDED.updated_at',
+  files: 'ON CONFLICT (id) DO UPDATE SET category = EXCLUDED.category, storage_path = EXCLUDED.storage_path, file_size_bytes = EXCLUDED.file_size_bytes, updated_at = EXCLUDED.updated_at',
 };
 function flush(db) {
   const out = [];
@@ -442,7 +444,7 @@ for (const t of threads) {
   if (pastAnte) {
     const mkDoc = (req, actor, submitter, status, tag, submittedAt, reviewedAt) => {
       const rowId = uid(`doc:${t.student}:${tag}`);
-      const fid = status === 'pending' ? null : addFile({ key: `docf:${t.student}:${tag}`, owner: submitter, name: `${slugify(req.name)}.pdf`, category: 'project_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
+      const fid = status === 'pending' ? null : addFile({ key: `docf:${t.student}:${tag}`, owner: submitter, name: `${slugify(req.name)}.pdf`, category: 'academic_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
         lines: [req.name, `Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, 'Documento de ejemplo cargado para el proceso de iniciación.'] });
       docRows.push([rowId, app.id, req.id, req.name, 'initial', actor, submitter, fid, status, status === 'approved' ? ADMIN_ID : null, status === 'approved' ? 'Documento verificado y aprobado.' : null, status === 'pending' ? null : T(submittedAt), status === 'approved' ? T(reviewedAt) : null, T(D_.anteDone), T(reviewedAt || submittedAt || D_.anteDone)]);
     };
@@ -471,7 +473,7 @@ for (const t of threads) {
       const rowId = uid(`fdoc:${t.student}:${f.tag}`);
       const submittedAt = atTime(addDays(ds.end, -10 + i), '16:00');
       const reviewedAt = atTime(addDays(ds.end, -7 + i), '10:00');
-      const fid = addFile({ key: `fdocf:${t.student}:${f.tag}`, owner: f.who, name: `${slugify(f.name)}.pdf`, category: 'project_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
+      const fid = addFile({ key: `fdocf:${t.student}:${f.tag}`, owner: f.who, name: `${slugify(f.name)}.pdf`, category: 'academic_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
         lines: [f.name, `Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, `Empresa: ${proj.company.name}`, 'Documento final de ejemplo aprobado por la coordinación académica.'] });
       docRows.push([rowId, app.id, reqId, f.name, 'final', f.actor, f.who, fid, 'approved', ADMIN_ID, 'Documento completo; se aprueba.', T(submittedAt), T(reviewedAt), T(submittedAt), T(reviewedAt)]);
     });
@@ -542,6 +544,20 @@ for (const t of threads) {
       evalRows.push([evId, app.id, proj.id, evaluator, evaluated, type, 'completed', overall, data.comment, strengths, improve, false, T(addDays(ds.end, 14)), T(doneAt), T(addDays(ds.end, 1)), T(doneAt)]);
       if (type === 'student_evaluates_company') { C[co.key].rating += overall; C[co.key].reviews += 1; }
       if (type === 'company_evaluates_student' || type === 'supervisor_evaluates_student') studentRatings[stu.key].push(overall);
+    });
+  }
+
+  // ── Evaluaciones pendientes: al entrar en cierre se abren las cuatro, para poder demostrar el flujo de
+  //    evaluar (la pestaña "Pendientes" de estudiante, empresa y docente). No afectan los promedios. ──
+  if (t.stage === 'finalizing') {
+    [
+      ['company_evaluates_student', co.userId, stu.userId],
+      ['student_evaluates_company', stu.userId, co.userId],
+      ['supervisor_evaluates_student', asesorUser, stu.userId],
+      ['student_evaluates_supervisor', stu.userId, asesorUser],
+    ].forEach(([type, evaluator, evaluated]) => {
+      const evId = uid(`eval:${t.student}:${type}`);
+      evalRows.push([evId, app.id, proj.id, evaluator, evaluated, type, 'pending', null, null, null, null, false, T(addDays(TODAY, 10)), null, T(addDays(TODAY, -3)), T(addDays(TODAY, -3))]);
     });
   }
 }
@@ -637,6 +653,17 @@ for (const p of Object.values(P)) {
 
 // ── Aplicaciones ──
 const statusOf = (a) => (a.thread ? a.status : a.status);
+// Proyectos del seed base que quedaron sin habilidades (p. ej. "App Móvil de Fidelización"): sin ellas
+// matching-service los puntúa con 0 ("proyecto sin skills") y no se recomiendan a nadie.
+{
+  const bare = psql('project_db', "SELECT id, title FROM projects p WHERE NOT EXISTS (SELECT 1 FROM project_skills s WHERE s.project_id = p.id) AND p.status IN ('published', 'in_progress', 'completed')");
+  const defaults = [['react', 'intermediate', true], ['rest apis', 'intermediate', true], ['docker', 'beginner', false], ['comunicacion efectiva', 'beginner', false]];
+  for (const [pid] of bare) {
+    ins('project_db', 'project_skills', ['id', 'project_id', 'name', 'catalog_skill_id', 'category', 'proficiency_level', 'is_mandatory', 'display_order', 'created_at'],
+      defaults.map(([n, level, mand], k) => { const c = skillRef(n); return [uid(`pskill-fix:${pid}:${n}`), pid, c.display, c.id, c.category, level, mand, k, T(TODAY)]; }));
+  }
+}
+
 ins('application_db', 'applications',
   ['id', 'project_id', 'student_id', 'status', 'cover_letter', 'resume_url', 'match_score', 'applied_at', 'reviewed_at', 'reviewed_by', 'accepted_at', 'completed_at', 'rejection_reason', 'withdrawal_reason', 'notes', 'created_at', 'updated_at'],
   apps.map((a) => [a.id, P[a.pk].id, S[a.sk].userId, statusOf(a), a.letter, S[a.sk].cvUrl, null, T(a.applied), a.reviewedAt ? T(a.reviewedAt) : null, a.reviewedBy || null, a.acceptedAt ? T(a.acceptedAt) : null, a.completedAt ? T(a.completedAt) : null,

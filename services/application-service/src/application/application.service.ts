@@ -302,12 +302,15 @@ export class ApplicationService {
     // 3. Obtener match score del Matching Service (opcional, no falla si no responde)
     let matchScore: number | null = null;
     try {
-      const matchResult = await this.httpClient.post<{ overallScore: number }>(
+      // El endpoint interno de matching responde { studentId, projectId, score }; se acepta
+      // también `overallScore` por compatibilidad. Antes solo se leía `overallScore`, que ese
+      // endpoint no devuelve, y toda postulación quedaba con match_score nulo.
+      const matchResult = await this.httpClient.post<{ score?: number; overallScore?: number }>(
         'matching',
         '/internal/matching/calculate-for-application',
         { projectId: dto.projectId, studentId },
       );
-      matchScore = matchResult?.overallScore ?? null;
+      matchScore = matchResult?.score ?? matchResult?.overallScore ?? null;
     } catch (err) {
       this.logger.warn(`Matching Service no disponible: ${err.message}. Continuando sin score.`);
     }

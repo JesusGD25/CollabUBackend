@@ -488,8 +488,23 @@ export class AnalyticsService {
 
   // ─── Skill Trends (serie histórica — depende del cron) ────────────────────────
 
+  /**
+   * Fecha del snapshot de skills más reciente. skill_trends guarda una fila por skill y por día;
+   * sin filtrar por fecha, "top skills" y "tendencias" mezclarían todos los días y repetirían
+   * cada habilidad tantas veces como snapshots existan.
+   */
+  private async latestSkillSnapshotDate(): Promise<SkillTrend['snapshotDate'] | null> {
+    const latest = await this.skillTrendRepo.findOne({ where: {}, order: { snapshotDate: 'DESC' } });
+    return latest?.snapshotDate ?? null;
+  }
+
   async getSkillTrends(query: MetricsQueryDto): Promise<SkillTrend[]> {
     const where = this.buildDateRange(query);
+    // Sin rango explícito se devuelve el estado actual (último snapshot), no el histórico mezclado.
+    if (!query.from && !query.to) {
+      const latest = await this.latestSkillSnapshotDate();
+      if (latest) where.snapshotDate = latest;
+    }
     return this.skillTrendRepo.find({
       where,
       order: { gapIndex: 'DESC' },
@@ -498,7 +513,9 @@ export class AnalyticsService {
   }
 
   async getTopDemandedSkills(limit = 10): Promise<SkillTrend[]> {
+    const latest = await this.latestSkillSnapshotDate();
     return this.skillTrendRepo.find({
+      where: latest ? { snapshotDate: latest } : {},
       order: { demandCount: 'DESC' },
       take: limit,
     });

@@ -14,9 +14,9 @@ cd Backend/scripts
 ./Run-Seed-Showcase.ps1 -PublicApiUrl http://<IP-PUBLICA>:3000   # en el servidor
 ```
 
-`-PublicApiUrl` es la URL del gateway **tal como la ve el navegador**: se guarda en los links de CV y de entregables para que abran la descarga real. Otros parámetros: `-Today yyyy-MM-dd` (fecha de referencia del escenario), `-SkipAnalytics`, `-SkipEnrichment`.
+`-PublicApiUrl` es la URL del gateway **tal como la ve el navegador**: se guarda en los links de CV y de entregables para que abran la descarga real. Otros parámetros: `-Today yyyy-MM-dd` (fecha de referencia del escenario), `-SkipAnalytics`, `-SkipEnrichment`, `-SkipMatching`.
 
-El script ejecuta, en orden: (1) genera `seed_showcase.sql` y los PDF; (2) aplica el SQL; (3) copia los PDF a `/app/uploads` de `collab-u-storage-service` si está dockerizado; (4) refresca los cierres de convocatorias del seed base (`seed_refresh_dates.sql`); (5) aplica `seed_analytics_enrichment.sql` (datos de las cuentas demo `student01-05` y `company01-02`); (6) dispara la agregación de analítica (backfill mensual + semanal + diaria), porque `analytics_db` **nunca** se llena por `INSERT`.
+El script ejecuta, en orden: (1) genera `seed_showcase.sql` y los PDF; (2) aplica el SQL; (3) copia los PDF a `/app/uploads` de `collab-u-storage-service` si está dockerizado; (4) refresca los cierres de convocatorias del seed base (`seed_refresh_dates.sql`); (5) aplica `seed_analytics_enrichment.sql` (datos de las cuentas demo `student01-05` y `company01-02`); (6) calcula el **match score** de todas las postulaciones con el algoritmo real de `matching-service` (`seed-match-scores.mjs`: llena `applications.match_score` y `match_results`, que alimentan la columna Match, el filtro por compatibilidad y el KPI "Match IA"); (7) dispara la agregación de analítica (backfill mensual + semanal + diaria) y crea un snapshot "de ayer" de skills (`seed_skill_trends_history.sql`) para que la tendencia (en alza / estable / a la baja) se vea desde el primer día. `analytics_db` **nunca** se llena por `INSERT`.
 
 > `seed_shift_dates.sql` quedó **obsoleto** (filtra por prefijos de ID que ya no existen y usa una columna `decided_at` inexistente). Lo reemplaza `seed_refresh_dates.sql`, independiente de IDs.
 
@@ -45,7 +45,7 @@ El script ejecuta, en orden: (1) genera `seed_showcase.sql` y los PDF; (2) aplic
 | cristian.mora@ | Cristian Mora | Civ | **En desarrollo** — Diseño de vía terciaria |
 | paula.revelo@ | Paula Revelo | Ele | **Esperando documentos** — Tablero PLC; póliza enviada, pendiente de revisión del admin |
 | julian.benavides@ | Julián Benavides | Ele | **Anteproyecto en revisión** — Brazo robótico; 1 de 2 jurados ya aprobó |
-| natalia.ortega@ | Natalia Ortega | Ele | **Cierre** — Inversor solar; documentos finales aprobados, falta el cierre administrativo |
+| natalia.ortega@ | Natalia Ortega | Ele | **Cierre** — Inversor solar; documentos finales aprobados, falta el cierre administrativo. Tiene **4 evaluaciones pendientes** (estudiante→empresa, estudiante→asesor, empresa→estudiante, asesor→estudiante): sirven para mostrar el flujo de evaluar |
 | brayan.narvaez@ | Brayan Narváez | Sis | Postulante — entrevista en 3 días y **prueba técnica pendiente de entrega** |
 | angela.cuaspud@ | Ángela Cuaspud | Sis | Postulante — varias postulaciones en distintos estados |
 | diego.enriquez@ | Diego Enríquez | Ele | Postulante — preseleccionado en el proyecto de sensores IoT |
@@ -80,5 +80,6 @@ El script ejecuta, en orden: (1) genera `seed_showcase.sql` y los PDF; (2) aplic
 
 - Los PDF son documentos de ejemplo generados (título, datos del hilo y texto de relleno), no contenido real.
 - No se siembran chat ni notificaciones (se generan al usar la plataforma).
+- Las evaluaciones del hilo de Natalia Ortega quedan **pendientes a propósito**: al enviarlas cambian de estado y no se pueden repetir sin resembrar.
 - Las empresas no tienen logo (`logo_url` nulo) para no mostrar imágenes rotas; se puede subir uno desde el perfil. Su completitud queda en 95 % por ese motivo.
 - Los cierres de convocatoria y las entrevistas futuras se calculan respecto a `-Today` (por defecto, la fecha de ejecución). Si pasan más de ~4 semanas, regenerar con `./Run-Seed-Showcase.ps1 -Today <fecha>`; el historial usa fechas fijas.
