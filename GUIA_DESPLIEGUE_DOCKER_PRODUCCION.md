@@ -313,6 +313,24 @@ node migrate-skills-unification.mjs
 node migrate-student-program.mjs
 ```
 
+### 11b. Seed "showcase" (datos completos para demo/sustentación)
+
+Después del seed base. Idempotente; ver `GUIA_SEED_SHOWCASE.md`:
+```bash
+cd ~/collabu/Backend
+pwsh ./scripts/Run-Seed-Showcase.ps1 -PublicApiUrl http://<IP-PUBLICA>:3000
+```
+`-PublicApiUrl` debe ser la URL del gateway como la ve el navegador. El script también copia los PDF al contenedor de storage, refresca cierres de convocatorias (`seed_refresh_dates.sql`, reemplaza al obsoleto `seed_shift_dates.sql`) y dispara la agregación de analítica. `Run-Seed.ps1` en modo Docker ahora copia también los archivos del seed base a `/app/uploads`.
+
+### Reiniciar todo con volúmenes nuevos (reset total)
+
+Con volumen de Postgres vacío el bootstrap crea solo todas las columnas nuevas: **no hacen falta** los `ALTER` manuales de la sección "cambios de esquema".
+```bash
+cd ~/collabu/Backend/docker
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down -v
+# luego: sección 7 (build, en tmux) → 8 (infra) → 9 (bootstrap) → 10 (prod) → 11 (seed base) → 11b (showcase)
+```
+
 ## 12. Verificación final
 
 ```bash
@@ -348,3 +366,27 @@ docker compose -f ~/collabu/Backend/docker/docker-compose.yml -f ~/collabu/Backe
 18/18 en `healthy` sin correr ningún otro comando. Si alguno no llegó a `healthy` todavía, esperar un poco más y repetir el `ps` — los healthchecks tienen un `start_period` de hasta ~25s.
 
 **Sin Elastic IP** (IP pública nueva cada vez que se para/arranca): además de lo anterior, hay que actualizar `.env` con la IP nueva y recrear `frontend`/`api-gateway` — ver sección "Sin Elastic IP" más arriba en este documento.
+
+## Actualizar a una versión nueva con cambios de esquema (checklist)
+
+En producción (`NODE_ENV=production`) TypeORM tiene `synchronize` apagado: **columnas/tablas nuevas en las entidades NO se crean solas** y el servicio afectado falla con `column "x" does not exist`. Las migraciones que existen (`services/*/src/migrations/`) tampoco se ejecutan al arrancar (no hay `migrationsRun`). Antes de reconstruir, revisar qué cambió en el esquema entre la versión desplegada y la nueva:
+
+```bash
+cd ~/collabu/Backend
+git fetch --all
+git diff --stat HEAD origin/<rama> -- 'services/*/src/**/entities/*.ts' 'services/*/src/migrations/*.ts'
+```
+
+Si hay entidades o migraciones nuevas, aplicar el SQL equivalente a mano ANTES de recrear los contenedores (las migraciones usan `ADD COLUMN`; usar `IF NOT EXISTS` para que sea idempotente). Es seguro hacerlo con los contenedores viejos corriendo: son columnas aditivas con default/nullable.
+
+Migraciones conocidas hasta ahora:
+```bash
+# auth-service — 1760100000000-AddTermsAndDataTreatmentToUsers (aceptación de términos, GEN-04)
+docker exec collab-u-postgres psql -U collabu_admin -d auth_db -c "ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted boolean NOT NULL DEFAULT false, ADD COLUMN IF NOT EXISTS terms_accepted_at timestamptz, ADD COLUMN IF NOT EXISTS terms_version varchar(20) NOT NULL DEFAULT 'v1.0', ADD COLUMN IF NOT EXISTS data_treatment_accepted boolean NOT NULL DEFAULT false;"
+
+# analytics-service — 1758980000000-AddEntityIdToReports (reportes por entidad puntual)
+docker exec collab-u-postgres psql -U collabu_admin -d analytics_db -c "ALTER TABLE reports ADD COLUMN IF NOT EXISTS entity_id uuid;"
+```
+(La migración `InitialSchema` de analytics no hace falta en un despliegue que ya tiene las tablas: sirve solo para bases vacías.)
+
+Después, el flujo normal: `git pull` en ambos repos → rebuild (de a uno, dentro de `tmux`) → `up -d --force-recreate --no-build`. Tras varios rebuilds, liberar disco con `docker image prune -f && docker builder prune -f` (revisar `df -h`; con 30GB se llena rápido).
