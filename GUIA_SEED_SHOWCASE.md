@@ -74,7 +74,7 @@ El script ejecuta, en orden: (1) genera `seed_showcase.sql` y los PDF; (2) aplic
 4. **Corrección de publicación**: empresa AndesTech edita y reenvía "Aplicación Móvil de Fidelización" (cambios solicitados por la facultad, con observaciones reales).
 5. **Aprobación de proyecto**: admin aprueba "Dashboard de Indicadores de Producción Lechera".
 6. **Analítica**: dashboards de admin y de empresa con más de un año de historial (desde jun-2025); evaluaciones con calificación por criterio; tendencias de skills.
-7. **Postular**: cualquier cuenta de estudiante frente a los 8 proyectos vigentes (cierres entre 4 y 8 semanas), con matching calculado en vivo.
+7. **Postular**: usar una cuenta de estudiante **sin proyecto activo** (Brayan Narváez, Ángela Cuaspud, Diego Enríquez, Mónica Rodríguez, Óscar Tobar, Daniela Hidalgo o Ricardo Chaves) frente a los 8 proyectos vigentes (cierres entre 4 y 8 semanas), con matching calculado en vivo. Los estudiantes con proyecto en desarrollo, en cierre o en espera de documentos reciben "Ya tienes un proyecto activo asignado" (regla EST-16); los que ya postularon a un proyecto reciben 409 en ese proyecto.
 
 ## Alcance y límites
 
