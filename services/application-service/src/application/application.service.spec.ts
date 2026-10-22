@@ -1070,4 +1070,68 @@ describe('ApplicationService', () => {
       );
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ALCANCE POR DEPARTAMENTO
+  // ═══════════════════════════════════════════════════════════════════
+  describe('alcance por departamento', () => {
+    it('postular guarda el programId del estudiante (snapshot de su departamento)', async () => {
+      mockHttpClient.get.mockImplementation(async (_svc: string, url: string) =>
+        url.includes('/exists')
+          ? { exists: true, status: 'published', companyId: COMPANY_ID }
+          : { programId: 'dept-sis' },
+      );
+      mockHttpClient.post.mockResolvedValue({ score: 70 });
+      const app = makeApplication();
+      applicationRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValueOnce(app);
+      applicationRepo.create.mockReturnValue(app);
+      applicationRepo.save.mockResolvedValue(app);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      await service.createApplication(STUDENT_ID, { projectId: PROJECT_ID, coverLetter: 'x'.repeat(60) });
+
+      expect(applicationRepo.create).toHaveBeenCalledWith(expect.objectContaining({ programId: 'dept-sis' }));
+    });
+
+    it('authorize: admin de OTRO departamento recibe 404 y no se evalúa el permiso', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication({ programId: 'dept-ele' } as any));
+
+      await expect(
+        service.authorize('app-1', { id: 'a1', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' }, 'view_documents' as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockProjectAccess.assertPermission).not.toHaveBeenCalled();
+    });
+
+    it('authorize: admin del departamento correcto y superadmin pasan', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication({ programId: 'dept-sis' } as any));
+      mockProjectAccess.assertPermission.mockResolvedValue({ contextRole: 'admin' });
+
+      await expect(
+        service.authorize('app-1', { id: 'a1', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' }, 'view_documents' as any),
+      ).resolves.toBeDefined();
+      await expect(
+        service.authorize('app-1', { id: 'f1', role: 'admin', adminLevel: 'super' }, 'view_documents' as any),
+      ).resolves.toBeDefined();
+    });
+
+    it('cola pendiente: el admin de departamento filtra por su programId', async () => {
+      applicationRepo.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.getAdminPendingApplications({}, { all: false, departmentId: 'dept-sis' });
+
+      expect(applicationRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ programId: 'dept-sis' }) }),
+      );
+    });
+
+    it('cola pendiente: el superadmin no filtra por programa', async () => {
+      applicationRepo.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.getAdminPendingApplications({}, { all: true });
+
+      const where = applicationRepo.findAndCount.mock.calls[0][0].where;
+      expect(where).not.toHaveProperty('programId');
+    });
+  });
 });

@@ -91,7 +91,13 @@ process.stdin.on('end', async () => {
 console.log(`Calculando match score de ${rows.length} postulaciones y ${extra.length} cruces estudiante-proyecto con matching-service...`);
 let results;
 try {
-  const stdout = execFileSync('docker', ['exec', '-i', MATCHING, 'node', '-e', remote], {
+  // matching-service dockerizado → se ejecuta dentro de su contenedor; si corre en el host (desarrollo local con
+  // `npm run start`), el endpoint interno es alcanzable en 127.0.0.1 y se ejecuta con el Node local.
+  let dockerized = false;
+  try { dockerized = execFileSync('docker', ['inspect', '-f', '{{.State.Running}}', MATCHING], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true'; } catch { /* sin contenedor */ }
+  const [cmd, cmdArgs] = dockerized ? ['docker', ['exec', '-i', MATCHING, 'node', '-e', remote]] : ['node', ['-e', remote.replace('http://localhost:', 'http://127.0.0.1:')]];
+  if (!dockerized) console.log('  matching-service no está dockerizado: se usa el servicio local (127.0.0.1).');
+  const stdout = execFileSync(cmd, cmdArgs, {
     input: JSON.stringify(pairs),
     encoding: 'utf8',
     env,

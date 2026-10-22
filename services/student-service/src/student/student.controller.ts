@@ -13,7 +13,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole, resolveDepartmentScope } from '@collab-u/shared';
 
 import { StudentService } from './student.service';
 import { CreateStudentProfileDto } from './dto/create-student-profile.dto';
@@ -88,8 +88,8 @@ export class StudentController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Buscar estudiantes con filtros' })
   @ApiResponse({ status: 200, description: 'Resultados paginados' })
-  async searchStudents(@Query() query: StudentSearchQueryDto) {
-    return this.studentService.searchStudents(query);
+  async searchStudents(@Query() query: StudentSearchQueryDto, @CurrentUser() user: any) {
+    return this.studentService.searchStudents(query, resolveDepartmentScope(user));
   }
 
   // ── SKILLS ──

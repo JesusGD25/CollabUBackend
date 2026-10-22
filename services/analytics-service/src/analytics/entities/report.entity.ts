@@ -34,6 +34,10 @@ export class Report {
   /** userId de la empresa/estudiante, o Supervisor.id del docente, cuando el reporte es sobre
    * UNA entidad puntual (company_performance/student_outcomes/supervisor_report) — null para
    * los reportes agregados de plataforma. */
+  /** Departamento al que se acotó el reporte; null = toda la Facultad. */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
+
   @Column({ name: 'entity_id', type: 'uuid', nullable: true })
   entityId: string | null;
 

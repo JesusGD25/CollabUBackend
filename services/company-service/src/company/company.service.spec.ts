@@ -1,8 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { CompanyService } from './company.service';
 import { CompanyProfile, CompanySize, VerificationStatus } from './entities/company-profile.entity';
@@ -113,6 +113,15 @@ function createMockArea(overrides: Partial<BusinessArea> = {}): BusinessArea {
 
 // ─── Test Suite ─────────────────────────────────────────────────────
 
+const mockHttpClient = { get: jest.fn() };
+const DEPT_SIS = '11111111-1111-4111-8111-111111111111';
+const DEPT_ELE = '22222222-2222-4222-8222-222222222222';
+const PROGRAMS = [
+  { id: DEPT_SIS, name: 'Sistemas', isActive: true },
+  { id: DEPT_ELE, name: 'Electrónica', isActive: true },
+  { id: '33333333-3333-4333-8333-333333333333', name: 'Industrial', isActive: false },
+];
+
 describe('CompanyService', () => {
   let service: CompanyService;
   let profileRepo: any;
@@ -129,6 +138,7 @@ describe('CompanyService', () => {
         { provide: getRepositoryToken(CompanyContact), useFactory: createMockRepo },
         { provide: getRepositoryToken(BusinessArea), useFactory: createMockRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
+        { provide: MicroserviceHttpClient, useValue: mockHttpClient },
       ],
     }).compile();
 
@@ -149,7 +159,52 @@ describe('CompanyService', () => {
   // CREATE PROFILE
   // ═══════════════════════════════════════════════════════════════════
   describe('createProfile', () => {
-    const dto = { userId: 'user-uuid-1', companyName: 'Tech Solutions SAS' };
+    const dto = { userId: 'user-uuid-1', companyName: 'Tech Solutions SAS', programIds: [DEPT_SIS] };
+
+    beforeEach(() => mockHttpClient.get.mockResolvedValue(PROGRAMS));
+
+    it('guarda los departamentos validados contra el catálogo (sin duplicados)', async () => {
+      const profile = createMockProfile();
+      profileRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(profile);
+      profileRepo.create.mockReturnValue(profile);
+      profileRepo.save.mockResolvedValue(profile);
+
+      await service.createProfile({ ...dto, programIds: [DEPT_SIS, DEPT_ELE, DEPT_SIS] });
+
+      expect(profileRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ programIds: [DEPT_SIS, DEPT_ELE] }),
+      );
+    });
+
+    it.each([
+      ['vacío', []],
+      ['un departamento que no existe', ['44444444-4444-4444-8444-444444444444']],
+      ['un departamento inactivo (Industrial)', ['33333333-3333-4333-8333-333333333333']],
+    ])('rechaza crear la empresa con %s', async (_l, ids) => {
+      profileRepo.findOne.mockResolvedValue(null);
+      await expect(service.createProfile({ ...dto, programIds: ids as string[] })).rejects.toThrow(BadRequestException);
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('si admin-service no responde → 503 y no guarda nada', async () => {
+      profileRepo.findOne.mockResolvedValue(null);
+      mockHttpClient.get.mockRejectedValue(new Error('ECONNREFUSED'));
+      await expect(service.createProfile(dto)).rejects.toThrow(ServiceUnavailableException);
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('el perfil base del evento de registro se crea sin departamentos y sin consultar el catálogo', async () => {
+      const profile = createMockProfile();
+      profileRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(profile);
+      profileRepo.create.mockReturnValue(profile);
+      profileRepo.save.mockResolvedValue(profile);
+      mockHttpClient.get.mockClear();
+
+      await service.createProfile({ userId: 'u', companyName: 'Pendiente', programIds: [] }, true);
+
+      expect(profileRepo.create).toHaveBeenCalledWith(expect.objectContaining({ programIds: [] }));
+      expect(mockHttpClient.get).not.toHaveBeenCalled();
+    });
 
     it('debería crear un perfil de empresa', async () => {
       const profile = createMockProfile();
@@ -705,6 +760,67 @@ describe('CompanyService', () => {
           service.updateRating('non-existent', 4.5, 10),
         ).rejects.toThrow(NotFoundException);
       });
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ALCANCE POR DEPARTAMENTO (admin)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('alcance por departamento', () => {
+    const qbMock = () => {
+      const qb: any = {};
+      for (const m of ['leftJoinAndSelect', 'orderBy', 'andWhere', 'skip', 'take']) qb[m] = jest.fn().mockReturnValue(qb);
+      qb.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+      return qb;
+    };
+
+    it('admin de departamento: la lista queda restringida a su departamento', async () => {
+      const qb = qbMock();
+      profileRepo.createQueryBuilder.mockReturnValue(qb);
+      await service.getAdminCompanies({ programId: DEPT_ELE }, { all: false, departmentId: DEPT_SIS });
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('scopeProgramId'), { scopeProgramId: DEPT_SIS });
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining(':programId'), expect.anything());
+    });
+
+    it('superadmin: puede filtrar por departamento o ver todo', async () => {
+      const qb = qbMock();
+      profileRepo.createQueryBuilder.mockReturnValue(qb);
+      await service.getAdminCompanies({ programId: DEPT_ELE }, { all: true });
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining(':programId'), { programId: DEPT_ELE });
+    });
+
+    it('estado inválido → 400 (no llega a la base de datos)', async () => {
+      await expect(service.getAdminCompanies({ status: 'approved' }, { all: true })).rejects.toThrow(BadRequestException);
+      expect(profileRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('programId que no es UUID → 400', async () => {
+      await expect(service.getAdminCompanies({ programId: 'no-uuid' }, { all: true })).rejects.toThrow(BadRequestException);
+    });
+
+    it('revisar una empresa de OTRO departamento → 404 y no cambia nada', async () => {
+      profileRepo.findOne.mockResolvedValue(createMockProfile({ programIds: [DEPT_ELE] } as any));
+      await expect(
+        service.reviewCompany('company-uuid-1', 'approve', undefined, { id: 'a1', scope: { all: false, departmentId: DEPT_SIS } }),
+      ).rejects.toThrow(NotFoundException);
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('empresa en dos departamentos: cualquiera de sus admins puede aprobar y queda registrado quién', async () => {
+      const company = createMockProfile({ programIds: [DEPT_SIS, DEPT_ELE] } as any);
+      profileRepo.findOne.mockResolvedValue(company);
+      profileRepo.save.mockImplementation(async (c: any) => c);
+      await service.reviewCompany('company-uuid-1', 'approve', undefined, { id: 'admin-ele', scope: { all: false, departmentId: DEPT_ELE } });
+      expect(company.verificationStatus).toBe(VerificationStatus.VERIFIED);
+      expect((company as any).reviewedBy).toBe('admin-ele');
+    });
+
+    it('superadmin aprueba cualquier empresa, incluso sin departamento', async () => {
+      const company = createMockProfile({ programIds: [] } as any);
+      profileRepo.findOne.mockResolvedValue(company);
+      profileRepo.save.mockImplementation(async (c: any) => c);
+      await service.reviewCompany('company-uuid-1', 'approve', undefined, { id: 'fac', scope: { all: true } });
+      expect(company.verificationStatus).toBe(VerificationStatus.VERIFIED);
     });
   });
 });

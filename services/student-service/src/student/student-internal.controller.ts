@@ -32,15 +32,19 @@ export class StudentInternalController {
   @ApiQuery({ name: 'from', required: false, type: 'string' })
   @ApiQuery({ name: 'to', required: false, type: 'string' })
   @ApiResponse({ status: 200, description: 'Estadísticas obtenidas' })
-  async getAnalyticsStats(@Query('from') from?: string, @Query('to') to?: string) {
-    return this.studentService.getAnalyticsStats(from, to);
+  async getAnalyticsStats(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('programId') programId?: string,
+  ) {
+    return this.studentService.getAnalyticsStats(from, to, programId);
   }
 
   @Get('skills/supply')
   @ApiOperation({ summary: 'Oferta actual de skills entre estudiantes (uso interno)' })
   @ApiResponse({ status: 200, description: 'Oferta de skills obtenida' })
-  async getSkillsSupply() {
-    return this.studentService.getSkillsSupply();
+  async getSkillsSupply(@Query('programId') programId?: string) {
+    return this.studentService.getSkillsSupply(programId);
   }
 
   @Post('update-rating')

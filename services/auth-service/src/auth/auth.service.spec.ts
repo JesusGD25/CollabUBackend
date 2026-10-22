@@ -620,7 +620,41 @@ describe('AuthService', () => {
         id: user.id,
         email: user.email,
         role: user.role,
+        adminLevel: null,
+        departmentId: null,
       });
+    });
+
+    it('un admin SIN nivel explícito (cuenta anterior a la división) se trata como superadmin', async () => {
+      const admin = createMockUser({ role: UserRole.ADMIN, adminLevel: null, departmentId: null });
+      jwtService.verify.mockReturnValue({ sub: admin.id });
+      userRepo.findOne.mockResolvedValue(admin);
+
+      const result = await service.validateToken('t');
+
+      expect(result.adminLevel).toBe('super');
+      expect(result.departmentId).toBeNull();
+    });
+
+    it('un admin de departamento devuelve su departamento', async () => {
+      const admin = createMockUser({ role: UserRole.ADMIN, adminLevel: 'department', departmentId: 'dept-sis' });
+      jwtService.verify.mockReturnValue({ sub: admin.id });
+      userRepo.findOne.mockResolvedValue(admin);
+
+      const result = await service.validateToken('t');
+
+      expect(result).toMatchObject({ role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' });
+    });
+
+    it('un docente/estudiante/empresa nunca lleva alcance, aunque la fila tenga datos sueltos', async () => {
+      const faculty = createMockUser({ role: UserRole.FACULTY, adminLevel: 'super', departmentId: 'x' });
+      jwtService.verify.mockReturnValue({ sub: faculty.id });
+      userRepo.findOne.mockResolvedValue(faculty);
+
+      const result = await service.validateToken('t');
+
+      expect(result.adminLevel).toBeNull();
+      expect(result.departmentId).toBeNull();
     });
 
     it('debería lanzar UnauthorizedException si el token es inválido', async () => {
@@ -684,6 +718,124 @@ describe('AuthService', () => {
       userRepo.findOne.mockResolvedValue(null);
 
       await expect(service.getUserRole('non-existent')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ADMINISTRADORES: nivel (Facultad / departamento)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('administradores por nivel', () => {
+    const DEPT = '11111111-1111-4111-8111-111111111111';
+    const base = { email: 'nuevo@udenar.edu.co', password: 'Clave-segura-1' };
+    let realFetch: typeof fetch;
+
+    const programsResponse = (programs: Array<{ id: string; isActive?: boolean }>) =>
+      (global.fetch as jest.Mock).mockResolvedValue({ ok: true, json: async () => programs });
+
+    beforeEach(() => {
+      realFetch = global.fetch;
+      global.fetch = jest.fn();
+      userRepo.findOne.mockResolvedValue(null);
+      userRepo.create.mockImplementation((u: any) => u as User);
+      userRepo.save.mockImplementation(async (u: any) => ({ id: 'new-id', createdAt: new Date(), lastLogin: null, ...u }) as User);
+    });
+    afterEach(() => {
+      global.fetch = realFetch;
+    });
+
+    it('crea un admin de DEPARTAMENTO verificando que el departamento exista', async () => {
+      programsResponse([{ id: DEPT, isActive: true }]);
+
+      const res = await service.createAdminUser({ ...base, role: UserRole.ADMIN, adminLevel: 'department', departmentId: DEPT } as any);
+
+      expect(res).toMatchObject({ role: 'admin', adminLevel: 'department', departmentId: DEPT });
+      expect(userRepo.save).toHaveBeenCalledWith(expect.objectContaining({ adminLevel: 'department', departmentId: DEPT }));
+    });
+
+    it('crea un SUPERADMIN sin departamento (ignora el departmentId que manden)', async () => {
+      const res = await service.createAdminUser({ ...base, role: UserRole.ADMIN, adminLevel: 'super', departmentId: DEPT } as any);
+
+      expect(res).toMatchObject({ adminLevel: 'super', departmentId: null });
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('un admin exige nivel explícito', async () => {
+      await expect(service.createAdminUser({ ...base, role: UserRole.ADMIN } as any)).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('un admin de departamento exige departamento', async () => {
+      await expect(
+        service.createAdminUser({ ...base, role: UserRole.ADMIN, adminLevel: 'department' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rechaza un departamento que no existe o está inactivo', async () => {
+      programsResponse([{ id: 'otro' }, { id: DEPT, isActive: false }]);
+      await expect(
+        service.createAdminUser({ ...base, role: UserRole.ADMIN, adminLevel: 'department', departmentId: DEPT } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('si admin-service no responde → 503 y NO crea el usuario', async () => {
+      (global.fetch as jest.Mock).mockRejectedValue(new Error('ECONNREFUSED'));
+      await expect(
+        service.createAdminUser({ ...base, role: UserRole.ADMIN, adminLevel: 'department', departmentId: DEPT } as any),
+      ).rejects.toMatchObject({ status: 503 });
+      expect(userRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('un usuario que NO es admin se guarda sin nivel ni departamento', async () => {
+      const res = await service.createAdminUser({ ...base, role: UserRole.FACULTY, adminLevel: 'super', departmentId: DEPT } as any);
+      expect(res).toMatchObject({ role: 'faculty', adminLevel: null, departmentId: null });
+    });
+
+    describe('updateAdminUser — protecciones', () => {
+      const superUser = (over: Partial<User> = {}) =>
+        createMockUser({ id: 'super-1', role: UserRole.ADMIN, adminLevel: 'super', departmentId: null, ...over });
+
+      const countSupers = (n: number) => {
+        (userRepo as any).createQueryBuilder = jest.fn(() => {
+          const qb: any = { where: () => qb, andWhere: () => qb, getCount: async () => n, select: () => qb, getOne: async () => superUser() };
+          return qb;
+        });
+      };
+
+      it('no deja degradar/desactivar al ÚLTIMO superadmin activo', async () => {
+        userRepo.findOne.mockResolvedValue(superUser());
+        countSupers(1);
+
+        await expect(service.updateAdminUser('super-1', { isActive: false } as any, 'otro-actor')).rejects.toBeInstanceOf(ConflictException);
+        programsResponse([{ id: DEPT, isActive: true }]);
+        await expect(
+          service.updateAdminUser('super-1', { adminLevel: 'department', departmentId: DEPT } as any, 'otro-actor'),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(userRepo.update).not.toHaveBeenCalled();
+      });
+
+      it('un superadmin no puede quitarse su propio acceso aunque haya más superadmins', async () => {
+        userRepo.findOne.mockResolvedValue(superUser());
+        countSupers(3);
+
+        await expect(service.updateAdminUser('super-1', { isActive: false } as any, 'super-1')).rejects.toBeInstanceOf(ConflictException);
+      });
+
+      it('sí permite degradar a un superadmin si quedan otros (y revoca sus sesiones)', async () => {
+        programsResponse([{ id: DEPT, isActive: true }]);
+        userRepo.findOne.mockResolvedValue(superUser());
+        countSupers(2);
+
+        await service.updateAdminUser('super-1', { adminLevel: 'department', departmentId: DEPT } as any, 'otro-actor');
+
+        expect(userRepo.update).toHaveBeenCalledWith('super-1', expect.objectContaining({ adminLevel: 'department', departmentId: DEPT }));
+        expect(refreshTokenRepo.update).toHaveBeenCalled();
+      });
+
+      it('no se puede eliminar al último superadmin ni a uno mismo', async () => {
+        userRepo.findOne.mockResolvedValue(superUser());
+        countSupers(1);
+        await expect(service.deleteAdminUser('super-1', 'otro')).rejects.toBeInstanceOf(ConflictException);
+        await expect(service.deleteAdminUser('super-1', 'super-1')).rejects.toBeInstanceOf(ConflictException);
+      });
     });
   });
 });

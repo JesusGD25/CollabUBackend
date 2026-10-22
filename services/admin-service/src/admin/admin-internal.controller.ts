@@ -38,8 +38,8 @@ export class AdminInternalController {
   }
 
   @Get('assignments/stats')
-  getAssignmentStats() {
-    return this.adminService.getAssignmentStats();
+  getAssignmentStats(@Query('programId') programId?: string) {
+    return this.adminService.getAssignmentStats(programId ? { all: false, departmentId: programId } : null);
   }
 
   @Get('assignments/by-application/:applicationId')

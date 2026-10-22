@@ -35,8 +35,12 @@ export class PlatformMetrics {
   @Column({ name: 'new_projects_period', default: 0 })
   newProjectsPeriod: number;
 
-  @Column({ name: 'snapshot_date', type: 'date', unique: true })
+  @Column({ name: 'snapshot_date', type: 'date' })
   snapshotDate: Date;
+
+  /** Departamento de la fila; null = total de la Facultad. Un snapshot por (fecha, departamento). */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
 
   @Column({ name: 'period_id', type: 'uuid', nullable: true })
   periodId: string | null;

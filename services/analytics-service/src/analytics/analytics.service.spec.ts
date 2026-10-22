@@ -428,13 +428,46 @@ describe('AnalyticsService', () => {
   // ─── Skill Trends ────────────────────────────────────────────────────────────
 
   describe('getSkillTrends', () => {
+    const qbMock = (rows: unknown[]) => {
+      const qb: any = {};
+      for (const m of ['where', 'andWhere', 'orderBy', 'addOrderBy', 'take']) qb[m] = jest.fn().mockReturnValue(qb);
+      qb.getMany = jest.fn().mockResolvedValue(rows);
+      return qb;
+    };
+
+    beforeEach(() => {
+      skillTrendRepo.findOne.mockResolvedValue({ snapshotDate: '2026-10-20' });
+    });
+
     it('should return skill trends list', async () => {
-      skillTrendRepo.find.mockResolvedValue([mockSkillTrend]);
+      skillTrendRepo.createQueryBuilder = jest.fn().mockReturnValue(qbMock([mockSkillTrend]));
 
       const result = await service.getSkillTrends({});
 
       expect(result).toHaveLength(1);
       expect(result[0].skillName).toBe('TypeScript');
+    });
+
+    it('admin de departamento: siempre su departamento, ignora el programId pedido', async () => {
+      const qb = qbMock([]);
+      skillTrendRepo.createQueryBuilder = jest.fn().mockReturnValue(qb);
+
+      await service.getSkillTrends({ programId: 'dept-ele' }, { all: false, departmentId: 'dept-sis' });
+
+      expect(qb.where).toHaveBeenCalledWith('t.program_id = :programId', { programId: 'dept-sis' });
+    });
+
+    it('superadmin sin programId: total de la Facultad (program_id IS NULL); aplica categoría, búsqueda, orden y tope', async () => {
+      const qb = qbMock([]);
+      skillTrendRepo.createQueryBuilder = jest.fn().mockReturnValue(qb);
+
+      await service.getSkillTrends({ category: 'tool', search: 'doc', sort: 'demand', limit: 5 }, { all: true });
+
+      expect(qb.where).toHaveBeenCalledWith('t.program_id IS NULL', { programId: null });
+      expect(qb.andWhere).toHaveBeenCalledWith('t.category = :category', { category: 'tool' });
+      expect(qb.andWhere).toHaveBeenCalledWith('t.skill_name ILIKE :search', { search: '%doc%' });
+      expect(qb.orderBy).toHaveBeenCalledWith('t.demand_count', 'DESC');
+      expect(qb.take).toHaveBeenCalledWith(5);
     });
   });
 
@@ -521,6 +554,54 @@ describe('AnalyticsService', () => {
       expect(reportRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ reportType: 'custom' }),
       );
+    });
+
+    describe('reportes de una entidad con admin de departamento', () => {
+      const SIS = 'dept-sis';
+      const ELE = 'dept-ele';
+      const sisScope = { all: false as const, departmentId: SIS };
+
+      it('empresa de OTRO departamento → 404 y no genera nada', async () => {
+        mockHttpClient.get.mockResolvedValue({ companyName: 'X', programIds: [ELE] });
+        await expect(
+          service.generateReport(userId, { name: 'R', reportType: 'company_performance', entityId: 'c1' }, sisScope),
+        ).rejects.toThrow(NotFoundException);
+        expect(reportRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('estudiante de OTRO departamento → 404', async () => {
+        mockHttpClient.get.mockResolvedValue({ programId: ELE });
+        await expect(
+          service.generateReport(userId, { name: 'R', reportType: 'student_outcomes', entityId: 's1' }, sisScope),
+        ).rejects.toThrow(NotFoundException);
+      });
+
+      it('docente sin departamento o inexistente → 404', async () => {
+        mockHttpClient.get.mockResolvedValue({ programId: null });
+        await expect(
+          service.generateReport(userId, { name: 'R', reportType: 'supervisor_report', entityId: 'sp1' }, sisScope),
+        ).rejects.toThrow(NotFoundException);
+        mockHttpClient.get.mockRejectedValue(new Error('404'));
+        await expect(
+          service.generateReport(userId, { name: 'R', reportType: 'supervisor_report', entityId: 'sp1' }, sisScope),
+        ).rejects.toThrow(NotFoundException);
+      });
+
+      it('empresa del propio departamento (aunque tenga otros) → genera el reporte', async () => {
+        mockHttpClient.get.mockResolvedValue({ companyName: 'X', programIds: [ELE, SIS] });
+        reportRepo.create.mockReturnValue(mockReport);
+        reportRepo.save.mockResolvedValue(mockReport);
+        await service.generateReport(userId, { name: 'R', reportType: 'company_performance', entityId: 'c1' }, sisScope);
+        expect(reportRepo.save).toHaveBeenCalledTimes(1);
+      });
+
+      it('superadmin no pasa por esta validación', async () => {
+        mockHttpClient.get.mockResolvedValue({ companyName: 'X', programIds: [ELE] });
+        reportRepo.create.mockReturnValue(mockReport);
+        reportRepo.save.mockResolvedValue(mockReport);
+        await service.generateReport(userId, { name: 'R', reportType: 'company_performance', entityId: 'c1' }, { all: true });
+        expect(reportRepo.save).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
@@ -853,6 +934,25 @@ describe('AnalyticsService', () => {
         2,
         expect.objectContaining({ totalStudents: 3, totalProjects: 3, totalApplications: 7 }),
       );
+    });
+
+    it('además de la serie de la Facultad escribe una serie por departamento activo, filtrando con su programId', async () => {
+      const SIS = 'dept-sis', ELE = 'dept-ele';
+      mockHttpClient.get.mockImplementation((service: string, path: string) => {
+        if (service === 'admin' && path.includes('/internal/admin/programs')) return Promise.resolve([{ id: SIS, isActive: true }, { id: ELE, isActive: false }]);
+        if (path.includes('to=2025-10-31') && service === 'student') return Promise.resolve({ totalCreated: path.includes(`programId=${SIS}`) ? 1 : 5, avgProfileCompleteness: 50 });
+        return Promise.resolve(null);
+      });
+      platformMetricsRepo.findOne.mockResolvedValue(null);
+      platformMetricsRepo.create.mockImplementation((v: any) => v);
+      platformMetricsRepo.save.mockImplementation((v: any) => Promise.resolve(v));
+
+      const result = await service.runHistoricalAggregation(['2025-10-31']);
+
+      expect(result.written).toBe(1); // se reportan las fechas, no las series
+      expect(platformMetricsRepo.save).toHaveBeenCalledTimes(2); // Facultad + Sistemas (Electrónica está inactivo)
+      expect(platformMetricsRepo.save).toHaveBeenCalledWith(expect.objectContaining({ totalStudents: 5, programId: null }));
+      expect(platformMetricsRepo.save).toHaveBeenCalledWith(expect.objectContaining({ totalStudents: 1, programId: SIS }));
     });
 
     it('does not throw when every internal endpoint is unreachable for a historical date', async () => {

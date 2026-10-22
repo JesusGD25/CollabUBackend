@@ -497,7 +497,7 @@ export const threads = [
     letter: 'Las vías rurales son una necesidad real de mi región; tengo experiencia en topografía y quisiera participar en el diseño y presupuesto de esta vía terciaria.',
   },
   {
-    student: 'S11', project: 'P_PLC', stage: 'waiting_documents', period: '2026-2', applied: '2026-08-24 10:15:00-05',
+    student: 'S11', project: 'P_PLC', stage: 'waiting_documents', docState: 'rejected', period: '2026-2', applied: '2026-08-24 10:15:00-05',
     asesor: 'DOC-002', jurados: ['DOC-001', 'DOC-003'], correction: false,
     letter: 'Quiero aprender a llevar un tablero de control desde el diseño hasta la puesta en marcha en planta; ya programo PLC en el laboratorio y busco una práctica con responsabilidad real.',
   },

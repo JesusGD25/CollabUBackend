@@ -41,9 +41,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildPdf } from './lib/seed-file-builders.mjs';
-import { companies } from './showcase/data-companies.mjs';
-import { students } from './showcase/data-students.mjs';
-import { projects, looseApplications, threads } from './showcase/data-projects.mjs';
+import { companies as baseCompanies } from './showcase/data-companies.mjs';
+import { students as baseStudents } from './showcase/data-students.mjs';
+import { projects as baseProjects, looseApplications as baseLoose, threads as baseThreads } from './showcase/data-projects.mjs';
+import { deptCompanies } from './showcase/data-dept-companies.mjs';
+import { deptStudents } from './showcase/data-dept-students.mjs';
+import { deptProjects } from './showcase/data-dept-projects.mjs';
+import { deptStaff, deptLoose, deptThreads } from './showcase/data-dept-flows.mjs';
+import { emitExtras } from './showcase/extras.mjs';
+
+// Capa base del showcase + capa "departamentos" (equilibrio Sistemas/Electrónica/Civil, todos los estados).
+const companies = [...baseCompanies, ...deptCompanies];
+const students = [...baseStudents, ...deptStudents];
+const projects = [...baseProjects, ...deptProjects];
+const looseApplications = [...baseLoose, ...deptLoose];
+const threads = [...baseThreads, ...deptThreads];
 
 // ───────────────────────────── CLI ─────────────────────────────
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -105,8 +117,10 @@ const TODAY = col(`${TODAY_STR} 09:00`);
 // Acumulador de filas por (base de datos, tabla). Las tablas se emiten en el orden en
 // que aparecen por primera vez (padres antes que hijas por cómo se llama `ins`), y las
 // bases en DB_ORDER. Agrupar por tabla evita un INSERT por fila.
-const DB_ORDER = ['auth_db', 'user_db', 'student_db', 'company_db', 'storage_db', 'project_db', 'admin_db', 'application_db', 'evaluation_db'];
+const DB_ORDER = ['auth_db', 'user_db', 'student_db', 'company_db', 'storage_db', 'project_db', 'admin_db', 'application_db', 'evaluation_db', 'notification_db', 'chat_db'];
 const buffers = Object.fromEntries(DB_ORDER.map((d) => [d, new Map()]));
+const raw = Object.fromEntries(DB_ORDER.map((d) => [d, []])); // SQL directo por base (UPDATE y filas con columnas distintas)
+const USERS_COLS = ['id', 'email', 'password_hash', 'role', 'is_verified', 'is_active', 'terms_accepted', 'terms_accepted_at', 'terms_version', 'data_treatment_accepted', 'failed_login_attempts', 'locked_until', 'last_login', 'created_at', 'updated_at'];
 const USER_PROFILE_COLS = ['id', 'user_id', 'role', 'first_name', 'last_name', 'country', 'city', 'department', 'bio', 'date_of_birth', 'gender', 'website_url', 'profile_completeness', 'is_onboarding_complete', 'last_active_at', 'created_at', 'updated_at'];
 function ins(db, table, cols, rows) {
   if (!rows.length) return;
@@ -136,6 +150,7 @@ function flush(db) {
       );
     }
   }
+  out.push(...raw[db]);
   return out;
 }
 
@@ -178,6 +193,8 @@ for (const [code, id, userId] of psql('admin_db', 'SELECT employee_code, id, use
 for (const code of ['DOC-001', 'DOC-002', 'DOC-003', 'DOC-004']) {
   if (!supervisors[code]) throw new Error(`Falta el supervisor ${code}: carga primero el seed base (Run-Seed.ps1).`);
 }
+// Docentes de la capa "departamentos": ids deterministas (sus filas las emite showcase/extras.mjs).
+for (const d of deptStaff) supervisors[d.code] = { id: uid(`sup:${d.code}`), userId: uid(`sup-user:${d.code}`) };
 
 const periodIds = {};
 for (const [name, id] of psql('admin_db', 'SELECT name, id FROM academic_periods')) periodIds[name] = id;
@@ -236,11 +253,13 @@ const firstName = (s) => s.first.split(' ')[0];
 for (const [ci, c] of Object.values(C).entries()) {
   const created = col(c.createdAt);
   const lastLogin = dayOffset(-(1 + ci), '08:30');
-  ins('auth_db', 'users', ['id', 'email', 'password_hash', 'role', 'is_verified', 'is_active', 'terms_accepted', 'terms_accepted_at', 'terms_version', 'data_treatment_accepted', 'last_login', 'created_at', 'updated_at'],
-    [[c.userId, c.email, PASSWORD_HASH, 'company', true, true, true, T(created), 'v1.0', true, T(lastLogin), T(created), T(created)]]);
+  ins('auth_db', 'users', USERS_COLS,
+    [[c.userId, c.email, PASSWORD_HASH, 'company', true, true, true, T(created), 'v1.0', true, 0, null, T(lastLogin), T(created), T(created)]]);
   ins('user_db', 'user_profiles', USER_PROFILE_COLS,
     [[uid(`co-uprof:${c.key}`), c.userId, 'company', c.contact.first, c.contact.last, 'Colombia', c.city, c.state, c.description.split('\n')[0], null, null, c.website, 100, true, T(lastLogin), T(created), T(created)]]);
   c.rating = 0; c.reviews = 0; // se actualizan tras construir las evaluaciones
+  c.status = c.status || 'verified';
+  c.programKeys = c.programs || { C1: ['SIS'], C2: ['SIS', 'ELE'], C3: ['CIV'], C4: ['ELE'] }[c.key] || [];
 }
 // (las filas de company_db.companies se emiten después, con rating y proyectos ya calculados)
 
@@ -275,6 +294,7 @@ const apps = []; // todas las aplicaciones normalizadas
 const timelineRows = [];
 const interviewRows = [];
 const selDocRows = [];
+const ivPatches = []; // UPDATE de columnas de entrevistas que el INSERT masivo no cubre
 
 const companyUser = (pk) => P[pk].company.userId;
 function tl(app, from, to, at, by, comment) {
@@ -298,14 +318,46 @@ for (const [pk, sk, status, applied, letter, extra = {}] of looseApplications) {
     app.reviewedBy = co; app.rejectionReason = extra.reason;
   }
   if (status === 'withdrawn') { step('pending', 'withdrawn', 2, '12:15', stu.userId, extra.reason); app.withdrawalReason = extra.reason; }
-  if (['shortlisted', 'interview'].includes(status)) app.notes = 'Buen perfil técnico y de comunicación; confirmar disponibilidad horaria antes de la entrevista.';
+  // Estados avanzados del embudo (sin hilo académico todavía): aceptada, pendiente de asesor y cancelada.
+  if (['accepted', 'pending_supervisor'].includes(status)) {
+    app.reviewedAt = step('pending', 'under_review', 1, '09:30', co, 'Postulación en revisión por el equipo de talento.'); app.reviewedBy = co;
+    step('under_review', 'shortlisted', 3, '15:10', co, 'Preseleccionado/a para la siguiente etapa del proceso.');
+    step('shortlisted', 'interview', 4, '11:00', co, 'Entrevista programada con el equipo técnico.');
+    app.acceptedAt = step('interview', 'accepted', 9, '11:30', co, 'Entrevista superada; se acepta la postulación.');
+    if (status === 'pending_supervisor') step('accepted', 'pending_supervisor', 10, '09:30', ADMIN_ID, 'Asesor académico asignado; pendiente de aceptación.');
+  }
+  if (status === 'cancelled') {
+    app.reviewedAt = step('pending', 'under_review', 1, '09:30', co, 'Postulación en revisión por el equipo de talento.'); app.reviewedBy = co;
+    step('under_review', 'cancelled', 20, '10:00', co, extra.reason);
+  }
+  if (['shortlisted', 'interview', 'accepted', 'pending_supervisor'].includes(status)) app.notes = 'Buen perfil técnico y de comunicación; confirmar disponibilidad horaria antes de la entrevista.';
   if (status === 'under_review') app.notes = 'Perfil con skills alineadas; pendiente comparar con el resto de candidatos.';
   apps.push(app);
+  if (extra.asesorFlow) app.asesorFlow = extra.asesorFlow;
 
   if (extra.interview) {
+    // iv.status: scheduled (por defecto) | completed | cancelled | rescheduled | no_show. `daysAgo` fecha entrevistas pasadas.
     const iv = extra.interview;
-    const when = atTime(addDays(TODAY, iv.daysAhead), iv.time.slice(0, 5));
-    interviewRows.push([uid(`iv:${app.id}`), app.id, T(when), 45, iv.type, iv.location || null, iv.link || null, 'scheduled', co, null, null, null, null, null, false, T(app.updatedAt), T(app.updatedAt)]);
+    const ivStatus = iv.status || 'scheduled';
+    const when = atTime(addDays(TODAY, iv.daysAhead !== undefined ? iv.daysAhead : -iv.daysAgo), iv.time.slice(0, 5));
+    const done = ivStatus === 'completed';
+    interviewRows.push([uid(`iv:${app.id}`), app.id, T(when), 45, iv.type, iv.location || null, iv.link || null, ivStatus, co, done ? (iv.feedback || null) : null, null, done ? (iv.score ?? null) : null, null, null, false, T(app.updatedAt), T(app.updatedAt)]);
+    // `cancelled_reason` y la resolución de la empresa viven en columnas propias: se completan con un UPDATE posterior.
+    if (iv.cancelledReason) ivPatches.push(`UPDATE interviews SET cancelled_reason = ${val(iv.cancelledReason)} WHERE id = ${val(uid(`iv:${app.id}`))};`);
+    if (iv.resolution) ivPatches.push(`UPDATE interviews SET company_resolution = '${iv.resolution}', resolution_comment = ${val(iv.resolution === 'passed' ? 'Avanza a la siguiente etapa del proceso.' : 'No continúa en el proceso de selección.')} WHERE id = ${val(uid(`iv:${app.id}`))};`);
+  }
+  if (extra.selectionDoc) {
+    // Prueba técnica de selección en estado requested | submitted | approved | rejected.
+    const sd = extra.selectionDoc;
+    const at = atTime(addDays(at0, 5), '10:00');
+    let fid = null, submittedAt = null, reviewedAt = null, reviewer = null;
+    if (['submitted', 'approved', 'rejected'].includes(sd.status)) {
+      submittedAt = atTime(addDays(at0, 7), '19:00');
+      fid = addFile({ key: `sel:${app.id}`, owner: stu.userId, name: 'solucion-prueba-tecnica.pdf', category: 'interview_attachment', entityType: 'selection_document_request', entityId: uid(`sel:${app.id}`), at: submittedAt,
+        lines: [`Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, `Prueba: ${sd.name}`, 'Solución entregada en documento adjunto con el desarrollo y las justificaciones.'] });
+    }
+    if (['approved', 'rejected'].includes(sd.status)) { reviewedAt = atTime(addDays(at0, 8), '09:00'); reviewer = co; }
+    selDocRows.push([uid(`sel:${app.id}`), app.id, sd.name, sd.description, true, co, sd.status, fid, submittedAt ? T(submittedAt) : null, reviewer, sd.comment || null, reviewedAt ? T(reviewedAt) : null, T(at), T(reviewedAt || submittedAt || at)]);
   }
 }
 
@@ -313,10 +365,13 @@ for (const [pk, sk, status, applied, letter, extra = {}] of looseApplications) {
 const staff = {}; // helpers
 const asg = []; // asignaciones (admin_db)
 const asgHistory = [];
+const asgPatches = []; // UPDATE de columnas que el INSERT masivo no cubre (decline_reason, declined_at…)
 const records = [], submissions = [], subHistory = [];
 const deliverablesRows = [], attachRows = [], commentRows = [];
 const docRows = [], docReqRows = [], finalReqRows = [];
 const evalRows = [], ratingRows = [];
+/** 0-5 (estrellas) → 0-100 (escala real de evaluation-service). */
+const toScale100 = (stars) => Math.round(stars * 20 * 100) / 100;
 const projectState = {}; // proyecto -> {positionsFilled}
 
 const interviewTypes = ['video', 'in_person', 'technical'];
@@ -327,7 +382,9 @@ for (const t of threads) {
   const ds = dateFor[t.project];
   const applied = col(t.applied);
   const done = t.stage === 'completed';
-  const started = ['active', 'finalizing', 'completed'].includes(t.stage);
+  const LATE = ['finalizing', 'waiting_final_docs', 'final_docs_review']; // etapas de cierre
+  const late = LATE.includes(t.stage);
+  const started = ['active', 'completed', ...LATE].includes(t.stage);
   const app = { id: uid(`app:${t.project}:${t.student}`), pk: t.project, sk: t.student, applied, letter: t.letter, thread: t };
   const D_ = {
     reviewed: atTime(addDays(applied, 2), '10:00'),
@@ -342,7 +399,7 @@ for (const t of threads) {
   D_.docsDone = atTime(addDays(D_.anteDone, 4), '12:00');
   const start = ds.start;
   D_.agreement = started ? atTime(addDays(start, -2), '11:00') : null;
-  const end = done || t.stage === 'finalizing' ? ds.end : null;
+  const end = done || late ? ds.end : null;
   const completedAt = done ? atTime(ds.end, '17:00') : null;
 
   // Estado final de la aplicación y su timeline
@@ -356,7 +413,7 @@ for (const t of threads) {
   tl(app, 'pending_supervisor', 'in_progress', D_.asesorOk, ADMIN_ID, 'Proyecto iniciado tras aceptación del asesor.');
   if (done) tl(app, 'in_progress', 'completed', completedAt, by, 'Proyecto finalizado: documentos finales aprobados y nota registrada.');
   app.reviewedAt = D_.reviewed; app.reviewedBy = by; app.acceptedAt = D_.accepted; app.completedAt = completedAt;
-  app.updatedAt = completedAt || (t.stage === 'finalizing' ? D_.docsDone : D_.asesorOk);
+  app.updatedAt = completedAt || (late ? D_.docsDone : D_.asesorOk);
   apps.push(app);
   projectState[t.project] = { filled: 1 };
 
@@ -381,7 +438,8 @@ for (const t of threads) {
   const mkAsg = (role, code, startAt, acceptedAt) => {
     const sup = supervisors[code];
     const id = uid(`asg:${t.student}:${role}:${code}`);
-    asg.push([id, sup.id, stu.userId, proj.id, app.id, periodIds[t.period], ADMIN_ID, role, D(startAt), done ? D(ds.end) : null, asgStatus, T(acceptedAt), null, T(addDays(acceptedAt, -1))]);
+    const st = role === 'asesor' && !done && t.asesorStatus ? t.asesorStatus : asgStatus;
+    asg.push([id, sup.id, stu.userId, proj.id, app.id, periodIds[t.period], ADMIN_ID, role, D(startAt), done ? D(ds.end) : null, st, T(acceptedAt), null, T(addDays(acceptedAt, -1)), programs[stu.program].id]);
     asgHistory.push([uid(`asgh:${id}:created`), id, 'created', null, sup.id, null, ADMIN_ID, T(addDays(acceptedAt, -1))]);
     asgHistory.push([uid(`asgh:${id}:accepted`), id, 'accepted', null, sup.id, null, sup.userId, T(acceptedAt)]);
     if (done) asgHistory.push([uid(`asgh:${id}:completed`), id, 'completed', null, sup.id, 'Proceso académico finalizado.', ADMIN_ID, T(completedAt)]);
@@ -390,43 +448,72 @@ for (const t of threads) {
   const asesorAsg = mkAsg('asesor', t.asesor, D_.asesorOk, D_.asesorOk);
   for (const code of t.jurados) mkAsg('jurado_anteproyecto', code, D_.anteSub, atTime(addDays(D_.anteSub, -3), '10:30'));
   if (t.final) mkAsg('jurado_final', t.final, atTime(addDays(ds.end, -14), '09:00'), atTime(addDays(ds.end, -13), '10:00'));
+  // Asignaciones adicionales en otros estados (declinada, desvinculada, reemplazada…)
+  for (const x of t.extraAsg || []) {
+    const sup = supervisors[x.code];
+    const id = uid(`asg:${t.student}:${x.role}:${x.code}:${x.status}`);
+    const when = atTime(addDays(applied, 12), '10:00');
+    asg.push([id, sup.id, stu.userId, proj.id, app.id, periodIds[t.period], ADMIN_ID, x.role, D(when), null, x.status, x.status === 'declined' ? null : T(when), null, T(addDays(when, -1)), programs[stu.program].id]);
+    asgHistory.push([uid(`asgh:${id}:created`), id, 'created', null, sup.id, null, ADMIN_ID, T(addDays(when, -1))]);
+    if (x.status === 'declined') asgPatches.push(`UPDATE supervisor_assignments SET decline_reason = ${val(x.reason)}, declined_at = ${val(T(addDays(when, 1)))} WHERE id = ${val(id)};`);
+    if (x.status === 'disconnected') asgPatches.push(`UPDATE supervisor_assignments SET disconnected_at = ${val(T(addDays(when, 40)))}, notes = ${val(x.reason)} WHERE id = ${val(id)};`);
+    if (x.status === 'replaced') asgPatches.push(`UPDATE supervisor_assignments SET notes = ${val(x.reason)} WHERE id = ${val(id)};`);
+    asgHistory.push([uid(`asgh:${id}:${x.status}`), id, x.status, null, sup.id, x.reason || null, ADMIN_ID, T(addDays(when, 1))]);
+  }
 
   // ── Anteproyecto ──
   const subId = uid(`sub:${t.student}`);
   const asesorUser = asesor.userId;
   const jurUsers = t.jurados.map((c) => supervisors[c].userId);
   const anteTitle = `Anteproyecto — ${proj.title}`;
-  const f1 = addFile({ key: `ante1:${t.student}`, owner: stu.userId, name: `anteproyecto-${slugify(proj.title).slice(0, 36)}-v1.pdf`, category: 'academic_document', entityType: 'academic_submission', entityId: subId, at: D_.anteSub,
-    lines: [anteTitle, `Estudiante: ${stu.fullName} · ${programs[stu.program].name}`, `Empresa: ${proj.company.name}`, 'Contenido: planteamiento del problema, objetivos, alcance, metodología, cronograma y referencias.', `Duración acordada: ${proj.months} meses.`] });
-  let currentFile = f1, version = 1, corrections = 0;
   const waitingAnte = t.stage === 'waiting_anteproyecto';
-  const subStatus = waitingAnte ? 'under_review' : 'approved';
+  // approved (por defecto fuera de esta etapa) | under_review | pending_submission | needs_revision | revised
+  const anteMode = waitingAnte ? (t.anteState || 'under_review') : 'approved';
+  const sentAnte = anteMode !== 'pending_submission';
+  const mkAnteFile = (v, at, lines) => addFile({ key: `ante${v}:${t.student}`, owner: stu.userId, name: `anteproyecto-${slugify(proj.title).slice(0, 36)}-v${v}.pdf`, category: 'academic_document', entityType: 'academic_submission', entityId: subId, at, lines });
+  let currentFile = null, version = 0, corrections = 0;
   const history = [];
-  history.push(['submitted', stu.userId, 'student', 'Primera versión del anteproyecto enviada.', f1, 1, D_.anteSub]);
-  if (t.correction && !waitingAnte) {
+  const votes = {};
+  if (sentAnte) {
+    const f1 = mkAnteFile(1, D_.anteSub, [anteTitle, `Estudiante: ${stu.fullName} · ${programs[stu.program].name}`, `Empresa: ${proj.company.name}`, 'Contenido: planteamiento del problema, objetivos, alcance, metodología, cronograma y referencias.', `Duración acordada: ${proj.months} meses.`]);
+    currentFile = f1; version = 1;
+    history.push(['submitted', stu.userId, 'student', 'Primera versión del anteproyecto enviada.', f1, 1, D_.anteSub]);
+  }
+  const wantsCorrection = (t.correction && !waitingAnte) || anteMode === 'needs_revision' || anteMode === 'revised';
+  if (wantsCorrection) {
     history.push(['asesor_commented', asesorUser, 'faculty', 'Revisé el documento: ajusta la sección de metodología y detalla los criterios de éxito antes de que lo evalúe el jurado.', null, 1, atTime(addDays(D_.anteSub, 2), '10:00')]);
     history.push(['correction_requested', jurUsers[0], 'faculty', 'Se solicita precisar el alcance y justificar la elección de las herramientas. Se otorgan 7 días para la corrección.', null, 1, atTime(addDays(D_.anteSub, 5), '15:00')]);
-    const f2 = addFile({ key: `ante2:${t.student}`, owner: stu.userId, name: `anteproyecto-${slugify(proj.title).slice(0, 36)}-v2.pdf`, category: 'academic_document', entityType: 'academic_submission', entityId: subId, at: atTime(addDays(D_.anteSub, 11), '09:30'),
-      lines: [anteTitle + ' (versión 2)', `Estudiante: ${stu.fullName}`, 'Cambios: metodología detallada, criterios de éxito medibles y justificación de herramientas.'] });
-    history.push(['revised', stu.userId, 'student', 'Versión 2 con las correcciones solicitadas por jurado y asesor.', f2, 2, atTime(addDays(D_.anteSub, 11), '09:30')]);
-    currentFile = f2; version = 2; corrections = 1;
+    corrections = 1;
   }
-  const votes = {};
-  if (waitingAnte) { votes[jurUsers[0]] = 'approve'; }
-  else { jurUsers.forEach((u) => { votes[u] = 'approve'; }); history.push(['approved', jurUsers[jurUsers.length - 1], 'faculty', 'Anteproyecto aprobado: propuesta clara, viable y bien fundamentada.', null, version, D_.anteDone]); }
-  const subSubmittedAt = t.correction && !waitingAnte ? atTime(addDays(D_.anteSub, 11), '09:30') : D_.anteSub;
-  submissions.push([subId, app.id, 'anteproyecto', subStatus, currentFile, version, corrections, J(votes),
-    waitingAnte ? 'Revisión en curso: un jurado ya aprobó, falta el voto del segundo.' : 'Aprobado: propuesta viable, objetivos claros y cronograma realista.',
-    t.correction ? 'Buen avance; atender las observaciones de metodología.' : 'Documento bien estructurado; listo para evaluación del jurado.',
-    t.correction && !waitingAnte ? 'Se incorporaron todas las observaciones en la versión 2.' : null,
-    waitingAnte ? T(dayOffset(5, '17:00')) : null, null, waitingAnte ? null : T(D_.anteDone), T(subSubmittedAt), T(D_.anteSub), T(waitingAnte ? subSubmittedAt : D_.anteDone)]);
+  if ((t.correction && !waitingAnte) || anteMode === 'revised') {
+    const f2 = mkAnteFile(2, atTime(addDays(D_.anteSub, 11), '09:30'), [anteTitle + ' (versión 2)', `Estudiante: ${stu.fullName}`, 'Cambios: metodología detallada, criterios de éxito medibles y justificación de herramientas.']);
+    history.push(['revised', stu.userId, 'student', 'Versión 2 con las correcciones solicitadas por jurado y asesor.', f2, 2, atTime(addDays(D_.anteSub, 11), '09:30')]);
+    currentFile = f2; version = 2;
+  }
+  if (anteMode === 'under_review') votes[jurUsers[0]] = 'approve';
+  if (anteMode === 'approved') { jurUsers.forEach((u) => { votes[u] = 'approve'; }); history.push(['approved', jurUsers[jurUsers.length - 1], 'faculty', 'Anteproyecto aprobado: propuesta clara, viable y bien fundamentada.', null, version, D_.anteDone]); }
+  const subStatus = anteMode === 'approved' ? 'approved' : anteMode; // los demás modos coinciden con el enum
+  const subSubmittedAt = !sentAnte ? null : version === 2 ? atTime(addDays(D_.anteSub, 11), '09:30') : D_.anteSub;
+  const anteNote = {
+    approved: 'Aprobado: propuesta viable, objetivos claros y cronograma realista.',
+    under_review: 'Revisión en curso: un jurado ya aprobó, falta el voto del segundo.',
+    pending_submission: 'Aún no se ha cargado la primera versión del anteproyecto.',
+    needs_revision: 'Se solicitaron correcciones de alcance y metodología; el estudiante debe enviar una nueva versión.',
+    revised: 'El estudiante envió la versión corregida; pendiente de nueva revisión del jurado.',
+  }[anteMode];
+  submissions.push([subId, app.id, 'anteproyecto', subStatus, currentFile, version, corrections, J(votes), anteNote,
+    t.correction || wantsCorrection ? 'Buen avance; atender las observaciones de metodología.' : 'Documento bien estructurado; listo para evaluación del jurado.',
+    wantsCorrection && version === 2 ? 'Se incorporaron todas las observaciones en la versión 2.' : null,
+    ['under_review', 'revised'].includes(anteMode) ? T(dayOffset(5, '17:00')) : null,
+    ['pending_submission', 'needs_revision'].includes(anteMode) ? T(dayOffset(anteMode === 'pending_submission' ? 9 : 4, '17:00')) : null,
+    anteMode === 'approved' ? T(D_.anteDone) : null, subSubmittedAt ? T(subSubmittedAt) : null, T(D_.anteSub), T(anteMode === 'approved' ? D_.anteDone : (subSubmittedAt || D_.anteSub))]);
   history.forEach(([action, actor, role, comment, file, ver, at], i) => {
     subHistory.push([uid(`subh:${subId}:${i}`), subId, action, actor, role, comment, file, ver, T(at)]);
   });
 
   // ── Registro académico ──
   const recId = uid(`rec:${t.student}`);
-  const recStatus = { completed: 'completed', active: 'active', waiting_documents: 'waiting_documents', waiting_anteproyecto: 'waiting_anteproyecto', finalizing: 'finalizing' }[t.stage];
+  const recStatus = { completed: 'completed', active: 'active', waiting_documents: 'waiting_documents', waiting_anteproyecto: 'waiting_anteproyecto', finalizing: 'finalizing', waiting_final_docs: 'waiting_final_docs', final_docs_review: 'final_docs_review' }[t.stage];
   let agreementFile = null, gradeFile = null;
   if (started) {
     agreementFile = addFile({ key: `agr:${t.student}`, owner: stu.userId, name: 'acuerdo-de-iniciacion-firmado.pdf', category: 'academic_document', entityType: 'project_academic_record', entityId: recId, at: D_.agreement,
@@ -436,8 +523,8 @@ for (const t of threads) {
     gradeFile = addFile({ key: `grade:${t.student}`, owner: asesorUser, name: 'acta-de-nota-final.pdf', category: 'academic_document', entityType: 'project_academic_record', entityId: recId, at: atTime(ds.end, '16:00'),
       lines: [`Acta de nota final — ${proj.title}`, `Estudiante: ${stu.fullName}`, `Nota final: ${t.grade.toFixed(1)} / 100`, 'Registrada por el asesor académico tras la aprobación de los documentos finales.'] });
   }
-  records.push([recId, app.id, asesorAsg, subId, agreementFile, started ? D(start) : null, started ? proj.weeks : null, started ? D(ds.end) : null, done || t.stage === 'finalizing' ? D(ds.end) : null,
-    gradeFile, done ? t.grade : null, recStatus, done || t.stage === 'finalizing', done, T(D_.asesorOk), T(app.updatedAt)]);
+  records.push([recId, app.id, asesorAsg, subId, agreementFile, started ? D(start) : null, started ? proj.weeks : null, started ? D(ds.end) : null, done || late ? D(ds.end) : null,
+    gradeFile, done ? t.grade : null, recStatus, done || late, done, T(D_.asesorOk), T(app.updatedAt)]);
 
   // ── Documentos iniciales (carta, póliza, certificado) ──
   const pastAnte = t.stage !== 'waiting_anteproyecto';
@@ -446,14 +533,19 @@ for (const t of threads) {
       const rowId = uid(`doc:${t.student}:${tag}`);
       const fid = status === 'pending' ? null : addFile({ key: `docf:${t.student}:${tag}`, owner: submitter, name: `${slugify(req.name)}.pdf`, category: 'academic_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
         lines: [req.name, `Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, 'Documento de ejemplo cargado para el proceso de iniciación.'] });
-      docRows.push([rowId, app.id, req.id, req.name, 'initial', actor, submitter, fid, status, status === 'approved' ? ADMIN_ID : null, status === 'approved' ? 'Documento verificado y aprobado.' : null, status === 'pending' ? null : T(submittedAt), status === 'approved' ? T(reviewedAt) : null, T(D_.anteDone), T(reviewedAt || submittedAt || D_.anteDone)]);
+      const reviewed = status === 'approved' || status === 'rejected';
+      const note = status === 'approved' ? 'Documento verificado y aprobado.' : status === 'rejected' ? 'La póliza no cubre todo el período de la práctica y no está firmada; corrige y vuelve a cargarla.' : null;
+      docRows.push([rowId, app.id, req.id, req.name, 'initial', actor, submitter, fid, status, reviewed ? ADMIN_ID : null, note, status === 'pending' ? null : T(submittedAt), reviewed ? T(reviewedAt) : null, T(D_.anteDone), T(reviewedAt || submittedAt || D_.anteDone)]);
+      // Las filas ya sembradas no se actualizan con ON CONFLICT DO NOTHING: se asegura el estado con un UPDATE idempotente.
+      if (status === 'rejected') raw.application_db.push(`UPDATE project_documents SET status = 'rejected', reviewer_id = ${val(ADMIN_ID)}, reviewer_comment = ${val(note)}, reviewed_at = ${val(T(reviewedAt))} WHERE id = ${val(rowId)} AND status <> 'rejected';`);
     };
     const dAt = (n) => atTime(addDays(D_.anteDone, n), '14:00');
     docReqRows.push([uid(`dreq:${t.student}:carta`), app.id, reqCarta.id, ADMIN_ID, T(D_.anteDone)]);
     docReqRows.push([uid(`dreq:${t.student}:poliza`), app.id, reqPoliza.id, ADMIN_ID, T(D_.anteDone)]);
     mkDoc(reqCarta, 'company', co.userId, 'approved', 'carta', dAt(1), dAt(2));
     if (t.stage === 'waiting_documents') {
-      mkDoc(reqPoliza, 'student', stu.userId, 'submitted', 'poliza', atTime(addDays(TODAY, -2), '16:30'), null);
+      if (t.docState === 'rejected') mkDoc(reqPoliza, 'student', stu.userId, 'rejected', 'poliza', atTime(addDays(TODAY, -6), '16:30'), atTime(addDays(TODAY, -4), '10:00'));
+      else mkDoc(reqPoliza, 'student', stu.userId, 'submitted', 'poliza', atTime(addDays(TODAY, -2), '16:30'), null);
     } else {
       mkDoc(reqPoliza, 'student', stu.userId, 'approved', 'poliza', dAt(1), dAt(3));
       docReqRows.push([uid(`dreq:${t.student}:cert`), app.id, reqCert.id, ADMIN_ID, T(D_.anteDone)]);
@@ -462,7 +554,7 @@ for (const t of threads) {
   }
 
   // ── Documentos finales ──
-  if (done || t.stage === 'finalizing') {
+  if (done || late) {
     const fin = [
       { tag: 'informe', name: 'Informe final del proyecto', desc: 'Documento final con objetivos, metodología, resultados, conclusiones y recomendaciones.', actor: 'student', who: stu.userId },
       { tag: 'cert', name: 'Certificación de cumplimiento de la empresa', desc: 'Certificación firmada por la empresa que confirma el desarrollo y la calidad del trabajo del estudiante.', actor: 'company', who: co.userId },
@@ -471,20 +563,22 @@ for (const t of threads) {
       const reqId = uid(`freq:${t.student}:${f.tag}`);
       finalReqRows.push([reqId, app.id, f.name, f.desc, f.actor, true, i + 1, ADMIN_ID, T(atTime(addDays(ds.end, -21), '10:00'))]);
       const rowId = uid(`fdoc:${t.student}:${f.tag}`);
-      const submittedAt = atTime(addDays(ds.end, -10 + i), '16:00');
-      const reviewedAt = atTime(addDays(ds.end, -7 + i), '10:00');
-      const fid = addFile({ key: `fdocf:${t.student}:${f.tag}`, owner: f.who, name: `${slugify(f.name)}.pdf`, category: 'academic_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
-        lines: [f.name, `Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, `Empresa: ${proj.company.name}`, 'Documento final de ejemplo aprobado por la coordinación académica.'] });
-      docRows.push([rowId, app.id, reqId, f.name, 'final', f.actor, f.who, fid, 'approved', ADMIN_ID, 'Documento completo; se aprueba.', T(submittedAt), T(reviewedAt), T(submittedAt), T(reviewedAt)]);
+      const dstate = (t.finalDocs && t.finalDocs[f.tag]) || 'approved'; // approved | submitted | rejected | pending
+      const submittedAt = dstate === 'pending' ? null : atTime(addDays(ds.end, -10 + i), '16:00');
+      const reviewedAt = ['approved', 'rejected'].includes(dstate) ? atTime(addDays(ds.end, -7 + i), '10:00') : null;
+      const fid = dstate === 'pending' ? null : addFile({ key: `fdocf:${t.student}:${f.tag}`, owner: f.who, name: `${slugify(f.name)}.pdf`, category: 'academic_document', entityType: 'project_document', entityId: rowId, at: submittedAt,
+        lines: [f.name, `Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, `Empresa: ${proj.company.name}`, dstate === 'approved' ? 'Documento final de ejemplo aprobado por la coordinación académica.' : 'Documento final de ejemplo en revisión por la coordinación académica.'] });
+      const comment = dstate === 'approved' ? 'Documento completo; se aprueba.' : dstate === 'rejected' ? 'Faltan las conclusiones y las recomendaciones; completa el documento y vuelve a enviarlo.' : null;
+      docRows.push([rowId, app.id, reqId, f.name, 'final', f.actor, f.who, fid, dstate, dstate === 'approved' || dstate === 'rejected' ? ADMIN_ID : null, comment, submittedAt ? T(submittedAt) : null, reviewedAt ? T(reviewedAt) : null, T(atTime(addDays(ds.end, -21), '10:00')), T(reviewedAt || submittedAt || atTime(addDays(ds.end, -21), '10:00'))]);
     });
   }
 
   // ── Entregables del estudiante ──
-  if (['active', 'finalizing', 'completed'].includes(t.stage)) {
+  if (['active', 'completed', ...LATE].includes(t.stage)) {
     const sisTypes = ['report', 'code', 'document'], otherTypes = ['report', 'document', 'report'];
     const dtypes = stu.program === 'SIS' ? sisTypes : otherTypes;
     // estados por hilo
-    const activeStates = { S8: ['approved', 'submitted', 'pending'], S9: ['approved', 'needs_revision', 'pending'], S10: ['submitted', 'pending', 'pending'] };
+    const activeStates = { S8: ['approved', 'submitted', 'pending'], S9: ['approved', 'needs_revision', 'pending'], S10: ['submitted', 'pending', 'pending'], E1: ['approved', 'rejected', 'pending'], V2: ['approved', 'submitted', 'pending'] };
     const states = activeStates[t.student] || ['approved', 'approved', 'approved'];
     const feedbackPool = ['Entrega clara y completa; cumple los criterios acordados.', 'Muy buen nivel de detalle y buenas decisiones técnicas.', 'Documentación ordenada y resultados bien sustentados.'];
     const delIds = [];
@@ -493,16 +587,16 @@ for (const t of threads) {
       delIds.push(delId);
       const due = atTime(addDays(start, days), '23:59');
       const status = states[i] || 'pending';
-      const submitted = ['approved', 'submitted', 'needs_revision'].includes(status);
+      const submitted = ['approved', 'submitted', 'needs_revision', 'rejected'].includes(status);
       const submittedAt = submitted ? (status === 'approved' ? atTime(addDays(due, -3 - (i % 2)), '16:00') : atTime(addDays(TODAY, -(2 + i)), '15:00')) : null;
-      const reviewedAt = status === 'approved' || status === 'needs_revision' ? atTime(addDays(submittedAt, 2), '11:00') : null;
+      const reviewedAt = ['approved', 'needs_revision', 'rejected'].includes(status) ? atTime(addDays(submittedAt, 2), '11:00') : null;
       let fid = null;
       if (submitted) {
         fid = addFile({ key: `delf:${t.student}:${i}`, owner: stu.userId, name: `${slugify(title).slice(0, 44)}.pdf`, category: 'deliverable', entityType: 'student_deliverable', entityId: delId, at: submittedAt,
           lines: [title, `Estudiante: ${stu.fullName}`, `Proyecto: ${proj.title}`, description] });
         attachRows.push([uid(`datt:${delId}`), delId, fileUrl(fid), `${slugify(title).slice(0, 44)}.pdf`, 2048, 'application/pdf', stu.userId, T(submittedAt)]);
       }
-      const feedback = status === 'approved' ? feedbackPool[i % 3] : status === 'needs_revision' ? 'Falta sustentar la validación con datos reales; ajusta y vuelve a enviar.' : null;
+      const feedback = status === 'approved' ? feedbackPool[i % 3] : status === 'needs_revision' ? 'Falta sustentar la validación con datos reales; ajusta y vuelve a enviar.' : status === 'rejected' ? 'El entregable no cumple los criterios acordados (faltan las pruebas y los resultados); se rechaza y debe rehacerse.' : null;
       const grade = status === 'approved' ? Math.round((4.3 + ((threadNo + i) % 6) / 10) * 10) / 10 : null;
       deliverablesRows.push([delId, app.id, uid(`pdel:${proj.key}:${i}`), title, description, dtypes[i], T(due), co.userId, 'company', T(start), fid ? fileUrl(fid) : null, fid ? 'application/pdf' : null,
         submittedAt ? T(submittedAt) : null, status, feedback, grade, reviewedAt ? co.userId : null, reviewedAt ? 'company' : null, reviewedAt ? T(reviewedAt) : null, 1, T(start), T(reviewedAt || submittedAt || start)]);
@@ -539,9 +633,12 @@ for (const t of threads) {
         const deltas = [0.2, -0.1, 0.1, -0.2, 0];
         const scores = crit.map((c, i) => Math.max(3, Math.min(5, Math.round((data.score + deltas[i % 5]) * 10) / 10)));
         overall = Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100;
-        crit.forEach((c, i) => ratingRows.push([uid(`rate:${evId}:${c.id}`), evId, c.id, scores[i], null, T(doneAt)]));
+        // El backend guarda calificaciones en escala 0-100 (DTO @Max(100), la UI divide entre 20).
+        crit.forEach((c, i) => ratingRows.push([uid(`rate:${evId}:${c.id}`), evId, c.id, toScale100(scores[i]), null, T(doneAt)]));
       }
-      evalRows.push([evId, app.id, proj.id, evaluator, evaluated, type, 'completed', overall, data.comment, strengths, improve, false, T(addDays(ds.end, 14)), T(doneAt), T(addDays(ds.end, 1)), T(doneAt)]);
+      // `overall` queda en 0-5 para promediar los ratings de perfil (average_rating/rating, que son 0-5);
+      // en evaluations.overall_score se guarda en 0-100.
+      evalRows.push([evId, app.id, proj.id, evaluator, evaluated, type, 'completed', toScale100(overall), data.comment, strengths, improve, (t.anonymous || []).includes(type), T(addDays(ds.end, 14)), T(doneAt), T(addDays(ds.end, 1)), T(doneAt)]);
       if (type === 'student_evaluates_company') { C[co.key].rating += overall; C[co.key].reviews += 1; }
       if (type === 'company_evaluates_student' || type === 'supervisor_evaluates_student') studentRatings[stu.key].push(overall);
     });
@@ -549,7 +646,7 @@ for (const t of threads) {
 
   // ── Evaluaciones pendientes: al entrar en cierre se abren las cuatro, para poder demostrar el flujo de
   //    evaluar (la pestaña "Pendientes" de estudiante, empresa y docente). No afectan los promedios. ──
-  if (t.stage === 'finalizing') {
+  if (['finalizing', 'final_docs_review'].includes(t.stage)) {
     [
       ['company_evaluates_student', co.userId, stu.userId],
       ['student_evaluates_company', stu.userId, co.userId],
@@ -562,6 +659,10 @@ for (const t of threads) {
   }
 }
 
+// ═════════════════════════════ 4c. CAPA "DEPARTAMENTOS" (docentes, admins, notificaciones, chat…) ═════════════════════════════
+emitExtras({ ins, uid, T, D, J, A, val, col, addDays, atTime, dayOffset, TODAY, S, P, C, apps, supervisors, programs, ADMIN_ID, PASSWORD_HASH, periodIds,
+  USERS_COLS, USER_PROFILE_COLS, evalRows, asg, asgHistory, asgPatches, threads, students, raw });
+
 // ═════════════════════════════ 5. EMISIÓN DE FILAS (estudiantes, empresas, proyectos…) ═════════════════════════════
 const completedStudents = new Set(threads.filter((t) => t.stage === 'completed').map((t) => t.student));
 const thesisOf = {};
@@ -571,8 +672,15 @@ for (const t of threads) if (P[t.project].type === 'thesis') thesisOf[t.student]
 students.forEach((s0, i) => {
   const s = S[s0.key];
   const prog = programs[s.program];
-  const created = col(`2025-0${6 + (i % 3)}-${p2(8 + i)} 10:00`);
+  const created = col(`2025-0${6 + (i % 3)}-${p2(8 + (i % 20))} 10:00`);
   const lastLogin = dayOffset(-(i % 9), '19:10');
+  // Registro sin verificar el correo: solo existe la cuenta (el perfil se crea al verificar).
+  if (s.account === 'unverified') {
+    ins('auth_db', 'users', USERS_COLS,
+      [[s.userId, s.email, PASSWORD_HASH, 'student', false, true, true, T(created), 'v1.0', true, 0, null, null, T(dayOffset(-3, '16:20')), T(dayOffset(-3, '16:20'))]]);
+    return;
+  }
+  const incomplete = !!s.incomplete;
   const enrollment = 2026 - Math.floor((s.semester - 1) / 2);
   const graduation = s.semester >= 10 ? 2026 : 2027;
   const ratings = studentRatings[s.key];
@@ -582,13 +690,14 @@ students.forEach((s0, i) => {
       ...s.exp.map((e) => `Experiencia: ${e.title} — ${e.company}`), `Idiomas: Español (nativo)${s.langs.length ? ', ' + s.langs.map((l) => l[0]).join(', ') : ''}`] });
   s.cvUrl = fileUrl(cvId);
 
-  ins('auth_db', 'users', ['id', 'email', 'password_hash', 'role', 'is_verified', 'is_active', 'terms_accepted', 'terms_accepted_at', 'terms_version', 'data_treatment_accepted', 'last_login', 'created_at', 'updated_at'],
-    [[s.userId, s.email, PASSWORD_HASH, 'student', true, true, true, T(created), 'v1.0', true, T(lastLogin), T(created), T(created)]]);
+  const locked = s.account === 'locked';
+  ins('auth_db', 'users', USERS_COLS,
+    [[s.userId, s.email, PASSWORD_HASH, 'student', true, s.account !== 'inactive', true, T(created), 'v1.0', true, locked ? 5 : 0, locked ? T(dayOffset(30, '08:00')) : null, T(lastLogin), T(created), T(created)]]);
   ins('user_db', 'user_profiles', USER_PROFILE_COLS,
-    [[uid(`st-uprof:${s.key}`), s.userId, 'student', s.first, s.last, 'Colombia', 'Pasto', 'Nariño', s.bio, D(col(s.dob)), s.gender, null, 100, true, T(lastLogin), T(created), T(created)]]);
+    [[uid(`st-uprof:${s.key}`), s.userId, 'student', s.first, s.last, 'Colombia', 'Pasto', 'Nariño', s.bio, D(col(s.dob)), s.gender, null, incomplete ? 35 : 100, !incomplete, T(lastLogin), T(created), T(created)]]);
   ins('student_db', 'student_profiles', ['id', 'user_id', 'program', 'program_id', 'faculty', 'semester', 'student_code', 'enrollment_year', 'expected_graduation_year', 'gpa', 'total_credits_completed', 'total_credits_required', 'bio', 'headline', 'cv_url', 'availability', 'preferred_work_mode', 'available_hours_per_week', 'willing_to_relocate', 'has_completed_internship', 'internship_count', 'average_rating', 'total_ratings', 'profile_completeness', 'is_visible', 'created_at', 'updated_at'],
     [[s.profileId, s.userId, prog.name, prog.id, 'Facultad de Ingeniería', s.semester, `${enrollment}${52000 + s.idx}`, enrollment, graduation, s.gpa, Math.round(160 * (s.semester - 1) / 10), 160, s.bio, s.headline, s.cvUrl, s.availability, s.mode, s.hours, s.relocate,
-      completedStudents.has(s.key), completedStudents.has(s.key) ? 1 : 0, avg, ratings.length, 100, true, T(created), T(lastLogin)]]);
+      completedStudents.has(s.key), completedStudents.has(s.key) ? 1 : 0, avg, ratings.length, incomplete ? 35 : 100, !incomplete, T(created), T(lastLogin)]]);
   ins('student_db', 'skills', ['id', 'student_id', 'name', 'catalog_skill_id', 'category', 'proficiency_level', 'years_of_experience', 'is_verified', 'display_order', 'created_at', 'updated_at'],
     s.skills.map(([n, level, years], k) => { const c = skillRef(n); return [uid(`skill:${s.key}:${n}`), s.profileId, c.display, c.id, c.category, level, years, false, k, T(created), T(created)]; }));
   ins('student_db', 'experiences', ['id', 'student_id', 'type', 'title', 'company_name', 'description', 'start_date', 'end_date', 'is_current', 'location', 'work_mode', 'achievements', 'technologies_used', 'display_order', 'created_at', 'updated_at'],
@@ -610,8 +719,12 @@ const projectCount = (ck) => projects.filter((p) => p.co === ck && ['published',
 for (const c of Object.values(C)) {
   const created = col(c.createdAt);
   const rating = c.reviews ? Math.round((c.rating / c.reviews) * 100) / 100 : 0;
-  ins('company_db', 'companies', ['id', 'user_id', 'company_name', 'legal_name', 'nit', 'industry', 'company_size', 'description', 'website', 'logo_url', 'founded_year', 'headquarters_city', 'headquarters_state', 'employee_count', 'verification_status', 'rating', 'total_reviews', 'total_projects', 'profile_completeness', 'is_active', 'created_at', 'updated_at'],
-    [[c.companyId, c.userId, c.name, c.legal, c.nit, c.industry, c.size, c.description, c.website, null, c.founded, c.city, c.state, c.employees, 'verified', rating, c.reviews, projectCount(c.key), 95, true, T(created), T(addDays(created, 3))]]);
+  const status = c.status;
+  const progIds = c.programKeys.map((k) => programs[k].id);
+  const decided = status !== 'pending';
+  ins('company_db', 'companies', ['id', 'user_id', 'company_name', 'legal_name', 'nit', 'industry', 'company_size', 'description', 'website', 'logo_url', 'founded_year', 'headquarters_city', 'headquarters_state', 'employee_count', 'verification_status', 'rating', 'total_reviews', 'total_projects', 'profile_completeness', 'is_active', 'created_at', 'updated_at', 'program_ids', 'reviewed_by', 'reviewed_at'],
+    [[c.companyId, c.userId, c.name, c.legal, c.nit, c.industry, c.size, c.description, c.website, null, c.founded, c.city, c.state, c.employees, status, rating, c.reviews, projectCount(c.key), status === 'pending' ? 70 : 95, status !== 'rejected', T(created), T(addDays(created, 3)),
+      new Raw(`ARRAY[${progIds.map((i) => `'${i}'`).join(', ')}]::uuid[]`), decided ? ADMIN_ID : null, decided ? T(addDays(created, 3)) : null]]);
   ins('company_db', 'company_locations', ['id', 'company_id', 'name', 'address', 'city', 'state', 'country', 'is_headquarters', 'is_active', 'created_at'],
     c.locations.map((l, k) => [uid(`loc:${c.key}:${k}`), c.companyId, l.name, l.address, l.city, l.state, 'Colombia', l.hq, true, T(created)]));
   ins('company_db', 'company_contacts', ['id', 'company_id', 'first_name', 'last_name', 'position', 'email', 'is_primary', 'is_active', 'created_at', 'updated_at'],
@@ -619,8 +732,14 @@ for (const c of Object.values(C)) {
      [uid(`contact:${c.key}:2`), c.companyId, c.contact2.first, c.contact2.last, c.contact2.position, c.contact2.email, false, true, T(created), T(created)]]);
   ins('company_db', 'business_areas', ['id', 'company_id', 'area_name', 'description', 'display_order', 'created_at'],
     c.areas.map(([n, d], k) => [uid(`area:${c.key}:${k}`), c.companyId, n, d, k, T(created)]));
-  ins('admin_db', 'company_verifications', ['id', 'company_id', 'verified_by', 'action', 'previous_status', 'new_status', 'reason', 'notes', 'created_at'],
-    [[uid(`cver:${c.key}`), c.companyId, ADMIN_ID, 'approved', 'pending', 'verified', 'Documentación legal verificada (certificado de existencia y RUT).', 'Empresa verificada por coordinación de prácticas.', T(addDays(created, 3))]]);
+  // Historial de verificación según el estado actual (una empresa pendiente aún no tiene decisión).
+  const verRows = [];
+  if (status === 'verified' || status === 'suspended') {
+    verRows.push([uid(`cver:${c.key}`), c.companyId, ADMIN_ID, 'approved', 'pending', 'verified', 'Documentación legal verificada (certificado de existencia y RUT).', 'Empresa verificada por coordinación de prácticas.', T(addDays(created, 3))]);
+  }
+  if (status === 'suspended') verRows.push([uid(`cver:${c.key}:susp`), c.companyId, ADMIN_ID, 'suspended', 'verified', 'suspended', c.reason, 'Suspensión registrada por la Facultad.', T(dayOffset(-20, '10:00'))]);
+  if (status === 'rejected') verRows.push([uid(`cver:${c.key}:rej`), c.companyId, ADMIN_ID, 'rejected', 'pending', 'rejected', c.reason, 'Solicitud rechazada; la empresa puede reenviarla con los soportes corregidos.', T(addDays(created, 4))]);
+  ins('admin_db', 'company_verifications', ['id', 'company_id', 'verified_by', 'action', 'previous_status', 'new_status', 'reason', 'notes', 'created_at'], verRows);
 }
 
 // ── Proyectos ──
@@ -656,7 +775,10 @@ const statusOf = (a) => (a.thread ? a.status : a.status);
 // Proyectos del seed base que quedaron sin habilidades (p. ej. "App Móvil de Fidelización"): sin ellas
 // matching-service los puntúa con 0 ("proyecto sin skills") y no se recomiendan a nadie.
 {
-  const bare = psql('project_db', "SELECT id, title FROM projects p WHERE NOT EXISTS (SELECT 1 FROM project_skills s WHERE s.project_id = p.id) AND p.status IN ('published', 'in_progress', 'completed')");
+  // Se excluye el proyecto "sin skills" que usa el e2e protegido de matching (matching-integration.e2e-spec.ts,
+  // PROJECT_SIN_SKILLS): debe quedar SIN habilidades para validar el caso de dato legacy.
+  const e2eNoSkillsFixture = '9f8ace78-f0a6-4a8b-8d69-536340f84415';
+  const bare = psql('project_db', `SELECT id, title FROM projects p WHERE NOT EXISTS (SELECT 1 FROM project_skills s WHERE s.project_id = p.id) AND p.status IN ('published', 'in_progress', 'completed') AND p.id <> '${e2eNoSkillsFixture}'`);
   const defaults = [['react', 'intermediate', true], ['rest apis', 'intermediate', true], ['docker', 'beginner', false], ['comunicacion efectiva', 'beginner', false]];
   for (const [pid] of bare) {
     ins('project_db', 'project_skills', ['id', 'project_id', 'name', 'catalog_skill_id', 'category', 'proficiency_level', 'is_mandatory', 'display_order', 'created_at'],
@@ -665,9 +787,9 @@ const statusOf = (a) => (a.thread ? a.status : a.status);
 }
 
 ins('application_db', 'applications',
-  ['id', 'project_id', 'student_id', 'status', 'cover_letter', 'resume_url', 'match_score', 'applied_at', 'reviewed_at', 'reviewed_by', 'accepted_at', 'completed_at', 'rejection_reason', 'withdrawal_reason', 'notes', 'created_at', 'updated_at'],
+  ['id', 'project_id', 'student_id', 'status', 'cover_letter', 'resume_url', 'match_score', 'applied_at', 'reviewed_at', 'reviewed_by', 'accepted_at', 'completed_at', 'rejection_reason', 'withdrawal_reason', 'notes', 'created_at', 'updated_at', 'program_id'],
   apps.map((a) => [a.id, P[a.pk].id, S[a.sk].userId, statusOf(a), a.letter, S[a.sk].cvUrl, null, T(a.applied), a.reviewedAt ? T(a.reviewedAt) : null, a.reviewedBy || null, a.acceptedAt ? T(a.acceptedAt) : null, a.completedAt ? T(a.completedAt) : null,
-    a.rejectionReason || null, a.withdrawalReason || null, a.notes || null, T(a.applied), T(a.updatedAt)]));
+    a.rejectionReason || null, a.withdrawalReason || null, a.notes || null, T(a.applied), T(a.updatedAt), programs[S[a.sk].program].id]));
 ins('application_db', 'application_timeline', ['id', 'application_id', 'from_status', 'to_status', 'comment', 'changed_by_user_id', 'created_at'], timelineRows);
 ins('application_db', 'interviews', ['id', 'application_id', 'scheduled_at', 'duration_minutes', 'interview_type', 'location', 'meeting_link', 'status', 'interviewer_id', 'interviewer_notes', 'student_feedback', 'score', 'company_resolution', 'resolution_comment', 'reminder_sent', 'created_at', 'updated_at'], interviewRows);
 
@@ -684,7 +806,7 @@ ins('application_db', 'selection_document_requests', ['id', 'application_id', 'n
 // Admin: periodo 2025-2 + asignaciones
 ins('admin_db', 'academic_periods', ['id', 'name', 'description', 'start_date', 'end_date', 'enrollment_start', 'enrollment_end', 'status', 'is_current', 'max_projects_per_company', 'max_applications_per_student', 'created_at', 'updated_at'],
   [[periodIds['2025-2'], '2025-2', 'Período académico 2025-2', D(col('2025-07-15')), D(col('2025-12-15')), D(col('2025-06-01')), D(col('2025-07-31')), 'closed', false, 10, 5, T(col('2025-06-01 09:00')), T(col('2025-12-16 09:00'))]]);
-ins('admin_db', 'supervisor_assignments', ['id', 'supervisor_id', 'student_id', 'project_id', 'application_id', 'period_id', 'assigned_by', 'role', 'start_date', 'end_date', 'status', 'accepted_at', 'notes', 'created_at'], asg);
+ins('admin_db', 'supervisor_assignments', ['id', 'supervisor_id', 'student_id', 'project_id', 'application_id', 'period_id', 'assigned_by', 'role', 'start_date', 'end_date', 'status', 'accepted_at', 'notes', 'created_at', 'program_id'], asg);
 ins('admin_db', 'supervisor_assignment_history', ['id', 'assignment_id', 'action', 'previous_supervisor_id', 'new_supervisor_id', 'reason', 'performed_by', 'created_at'], asgHistory);
 
 // Application: flujo académico
@@ -710,6 +832,8 @@ const header = [
 ];
 const chunks = [...header];
 for (const db of DB_ORDER) {
+  if (db === 'application_db') raw.application_db.push(...ivPatches);
+  if (db === 'admin_db') raw.admin_db.push(...asgPatches);
   const stmts = flush(db);
   if (!stmts.length) continue;
   chunks.push(`\n\\c ${db};`, "SET client_encoding = 'UTF8';", ...stmts);

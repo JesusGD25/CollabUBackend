@@ -4,11 +4,12 @@ import {
   NotFoundException,
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, FindOptionsWhere, IsNull, ILike, In } from 'typeorm';
-import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient, DepartmentScope, assertInScope } from '@collab-u/shared';
 
 import { AcademicPeriod, PeriodStatus } from './entities/academic-period.entity';
 import { AcademicProgram } from './entities/academic-program.entity';
@@ -22,6 +23,7 @@ import { AcademicTemplate } from './entities/academic-template.entity';
 import { DocumentRequirement } from './entities/document-requirement.entity';
 import { SkillCatalog, SkillCategory } from './entities/skill-catalog.entity';
 import { SkillProgramMapping } from './entities/skill-program-mapping.entity';
+import { AssignmentWorkflowService, AssignmentResult } from './assignment-workflow.service';
 
 import {
   CreateAcademicPeriodDto,
@@ -257,6 +259,7 @@ export class AdminService implements OnModuleInit {
 
     private readonly eventPublisher: EventPublisher,
     private readonly httpClient: MicroserviceHttpClient,
+    private readonly assignments: AssignmentWorkflowService,
   ) {}
 
   async onModuleInit() {
@@ -278,6 +281,81 @@ export class AdminService implements OnModuleInit {
     await this.seedAcademicPrograms();
     await this.seedSkillCatalog();
     await this.syncSkillProgramMappings();
+    await this.backfillSupervisorPrograms();
+    // application-service puede arrancar después: se reintenta (idempotente).
+    [10000, 60000, 150000].forEach((delay) =>
+      setTimeout(() => {
+        this.backfillAssignmentPrograms().catch((err) =>
+          this.logger.warn(`Backfill de program_id en asignaciones omitido: ${err.message}`),
+        );
+      }, delay),
+    );
+  }
+
+  // ─── Alcance por departamento ──────────────────────────────────────────────────
+
+  /** Departamento del admin (programa académico) o 403 si su cuenta apunta a uno inexistente. */
+  private async scopeProgram(scope: DepartmentScope | null): Promise<AcademicProgram | null> {
+    if (!scope || scope.all) return null;
+    const program = await this.programRepo.findOne({ where: { id: scope.departmentId } });
+    if (!program) {
+      throw new ForbiddenException('Tu departamento ya no existe en el catálogo de programas.');
+    }
+    return program;
+  }
+
+  private async assertActiveProgram(programId: string): Promise<AcademicProgram> {
+    const program = await this.programRepo.findOne({ where: { id: programId } });
+    if (!program || !program.isActive) {
+      throw new BadRequestException('El departamento indicado no existe o está inactivo.');
+    }
+    return program;
+  }
+
+  /** Docentes previos a la división: se deduce el departamento del texto libre `department`. */
+  private async backfillSupervisorPrograms(): Promise<void> {
+    const pending = await this.supervisorRepo.find({ where: { programId: IsNull() } });
+    if (pending.length === 0) return;
+    const programs = await this.programRepo.find({ where: { isActive: true } });
+    const norm = (v: string) => normalizeSkillName(v).replace(/^ingenieria( de)? /, '');
+    let updated = 0;
+    for (const sup of pending) {
+      if (!sup.department) continue;
+      const text = norm(sup.department);
+      const match = programs.find((p) => {
+        const name = norm(p.name);
+        return name === text || text.includes(name) || name.includes(text);
+      });
+      if (match) {
+        await this.supervisorRepo.update(sup.id, { programId: match.id });
+        updated++;
+      }
+    }
+    if (updated) this.logger.log(`Backfill program_id en docentes: ${updated}/${pending.length}`);
+  }
+
+  /** Asignaciones previas: toman el departamento de la postulación (mejor esfuerzo). */
+  private async backfillAssignmentPrograms(): Promise<void> {
+    const pending = await this.assignmentRepo.find({ where: { programId: IsNull() }, select: ['id', 'applicationId'] });
+    if (pending.length === 0) return;
+    const cache = new Map<string, string | null>();
+    let updated = 0;
+    for (const a of pending) {
+      if (!cache.has(a.applicationId)) {
+        try {
+          const app = await this.httpClient.get<{ programId?: string | null }>('application', `/internal/applications/${a.applicationId}/enriched`);
+          cache.set(a.applicationId, app?.programId ?? null);
+        } catch {
+          cache.set(a.applicationId, null);
+        }
+      }
+      const programId = cache.get(a.applicationId);
+      if (programId) {
+        await this.assignmentRepo.update(a.id, { programId });
+        updated++;
+      }
+    }
+    this.logger.log(`Backfill program_id en asignaciones: ${updated}/${pending.length}`);
   }
 
   private async seedAcademicPrograms(): Promise<void> {
@@ -362,7 +440,10 @@ export class AdminService implements OnModuleInit {
 
   // ─── Dashboard ──────────────────────────────────────────────────────────────
 
-  async getDashboard() {
+  async getDashboard(scope: DepartmentScope | null = null) {
+    const scopedId = scope && !scope.all ? scope.departmentId : null;
+    const supWhere = scopedId ? { isActive: true, programId: scopedId } : { isActive: true };
+    const asgWhere = scopedId ? { status: AssignmentStatus.ACCEPTED, programId: scopedId } : { status: AssignmentStatus.ACCEPTED };
     const [
       pendingVerifications,
       activePrograms,
@@ -373,8 +454,8 @@ export class AdminService implements OnModuleInit {
       this.verificationRepo.count({ where: { action: VerificationAction.APPROVED } }),
       this.programRepo.count({ where: { isActive: true } }),
       this.periodRepo.count({ where: { status: PeriodStatus.ACTIVE } }),
-      this.supervisorRepo.count({ where: { isActive: true } }),
-      this.assignmentRepo.count({ where: { status: AssignmentStatus.ACCEPTED } }),
+      this.supervisorRepo.count({ where: supWhere }),
+      this.assignmentRepo.count({ where: asgWhere }),
     ]);
 
     const currentPeriod = await this.periodRepo.findOne({
@@ -541,18 +622,33 @@ export class AdminService implements OnModuleInit {
 
   // ─── Supervisors ──────────────────────────────────────────────────────────────
 
-  async createSupervisor(dto: CreateSupervisorDto): Promise<Supervisor> {
+  async createSupervisor(dto: CreateSupervisorDto, scope: DepartmentScope | null = null): Promise<Supervisor> {
     const existing = await this.supervisorRepo.findOne({ where: { userId: dto.userId } });
     if (existing) throw new ConflictException('El usuario ya tiene un perfil de supervisor');
 
-    const supervisor = this.supervisorRepo.create(dto);
+    // Admin de departamento: el docente queda siempre en SU departamento. Superadmin elige (o lo deja sin asignar).
+    const programId = scope && !scope.all ? scope.departmentId : dto.programId;
+    if (programId) await this.assertActiveProgram(programId);
+
+    const supervisor = this.supervisorRepo.create({ ...dto, programId: programId ?? null });
     return this.supervisorRepo.save(supervisor);
   }
 
-  async getSupervisors(isActive?: boolean, onboardingComplete?: boolean): Promise<any[]> {
+  /**
+   * Docentes. Admin de departamento: por defecto solo los de su departamento; con
+   * `includeOtherDepartments` ve también los de otros (marcados `crossDepartment`, para asignar
+   * con aviso de "otro departamento"). Superadmin: todos.
+   */
+  async getSupervisors(
+    isActive?: boolean,
+    onboardingComplete?: boolean,
+    scope: DepartmentScope | null = null,
+    includeOtherDepartments = false,
+  ): Promise<any[]> {
     const where: FindOptionsWhere<Supervisor> = {};
     if (isActive !== undefined) where.isActive = isActive;
     if (onboardingComplete !== undefined) where.isOnboardingComplete = onboardingComplete;
+    if (scope && !scope.all && !includeOtherDepartments) where.programId = scope.departmentId;
     const supervisors = await this.supervisorRepo.find({ where, order: { createdAt: 'DESC' } });
 
     if (!supervisors.length) return [];
@@ -577,6 +673,7 @@ export class AdminService implements OnModuleInit {
         firstName: user?.firstName ?? null,
         lastName: user?.lastName ?? null,
         fullName: user ? `${user.firstName} ${user.lastName}` : null,
+        crossDepartment: !!scope && !scope.all && s.programId !== scope.departmentId,
       };
     });
   }
@@ -588,173 +685,18 @@ export class AdminService implements OnModuleInit {
   }
 
   /**
-   * Crea la asignación de asesor (queda pendiente de aceptación) y, opcionalmente,
-   * uno o más jurados de anteproyecto (se auto-aceptan, no pueden rechazar).
-   * El proyecto/aplicación NO inicia todavía — eso ocurre cuando el asesor acepta
-   * (ver acceptAssignment). Antes, esto ocurría inmediatamente aquí; se movió para
-   * que la aceptación del docente sea un paso real, no una formalidad ignorada.
+   * Asigna asesor (queda pendiente de aceptación) y, opcionalmente, jurados de anteproyecto
+   * (se auto-aceptan). La lógica vive en AssignmentWorkflowService: validación previa completa,
+   * una sola transacción, reutilización de asignaciones terminales y respuesta `{ created, skipped }`.
+   * El proyecto/postulación NO inician aquí — solo cuando el asesor acepta (ver acceptAssignment).
    */
-  async assignSupervisor(adminId: string, dto: AssignSupervisorDto): Promise<SupervisorAssignment[]> {
-    const asesor = await this.getSupervisorById(dto.supervisorId);
-    if (!asesor.isActive) {
-      throw new BadRequestException('El docente no está activo');
-    }
-    if (asesor.currentStudents >= asesor.maxStudents) {
-      throw new BadRequestException('El docente ha alcanzado su límite de estudiantes');
-    }
-
-    const existingAsesor = await this.assignmentRepo.findOne({
-      where: { studentId: dto.studentId, projectId: dto.projectId, role: AssignmentRole.ASESOR },
-    });
-    if (existingAsesor) throw new ConflictException('El estudiante ya tiene un asesor asignado para este proyecto');
-
-    const created: SupervisorAssignment[] = [];
-
-    const asesorAssignment = this.assignmentRepo.create({
-      supervisorId: dto.supervisorId,
-      studentId: dto.studentId,
-      projectId: dto.projectId,
-      applicationId: dto.applicationId,
-      periodId: dto.periodId,
-      startDate: dto.startDate,
-      endDate: dto.endDate,
-      notes: dto.notes,
-      assignedBy: adminId,
-      role: AssignmentRole.ASESOR,
-      status: AssignmentStatus.PENDING_ACCEPTANCE,
-    });
-    const savedAsesor = await this.assignmentRepo.save(asesorAssignment);
-    created.push(savedAsesor);
-    await this.supervisorRepo.increment({ id: dto.supervisorId }, 'currentStudents', 1);
-    await this.recordAssignmentHistory(savedAsesor.id, AssignmentHistoryAction.CREATED, adminId, null, dto.supervisorId);
-
-    // El asesor todavía no aceptó, pero la postulación ya no debe seguir
-    // apareciendo en la cola de "pendientes de asignar" — pasa a esperar
-    // la aceptación explícita del docente.
-    await this.httpClient
-      .patch('application', `/internal/applications/${savedAsesor.applicationId}/pending-supervisor`, {})
-      .catch((err) => this.logger.warn(
-        `No se pudo marcar pending_supervisor para ${savedAsesor.applicationId}: ${err.message}`,
-      ));
-
-    await this.eventPublisher.publish(
-      'admin.supervisor.assigned',
-      {
-        assignmentId: savedAsesor.id,
-        supervisorId: savedAsesor.supervisorId,
-        supervisorUserId: asesor.userId,
-        studentId: savedAsesor.studentId,
-        projectId: savedAsesor.projectId,
-        applicationId: savedAsesor.applicationId,
-        role: AssignmentRole.ASESOR,
-        assignedBy: savedAsesor.assignedBy,
-      },
-      'admin-service',
-    );
-
-    // Jurado(s) del anteproyecto — se asignan junto con el asesor, auto-aceptados.
-    for (const juradoId of dto.juradoIds ?? []) {
-      if (juradoId === dto.supervisorId) {
-        throw new BadRequestException('El asesor no puede ser también jurado del mismo proyecto');
-      }
-      const jurado = await this.getSupervisorById(juradoId);
-      if (!jurado.isActive) {
-        throw new BadRequestException(`El docente jurado ${juradoId} no está activo`);
-      }
-
-      const existingJurado = await this.assignmentRepo.findOne({
-        where: { studentId: dto.studentId, projectId: dto.projectId, role: AssignmentRole.JURADO_ANTEPROYECTO, supervisorId: juradoId },
-      });
-      if (existingJurado) continue; // este docente ya es jurado de este anteproyecto
-
-      const juradoAssignment = this.assignmentRepo.create({
-        supervisorId: juradoId,
-        studentId: dto.studentId,
-        projectId: dto.projectId,
-        applicationId: dto.applicationId,
-        periodId: dto.periodId,
-        startDate: dto.startDate,
-        endDate: dto.endDate,
-        assignedBy: adminId,
-        role: AssignmentRole.JURADO_ANTEPROYECTO,
-        status: AssignmentStatus.ACCEPTED,
-        acceptedAt: new Date(),
-      });
-      const savedJurado = await this.assignmentRepo.save(juradoAssignment);
-      created.push(savedJurado);
-      await this.recordAssignmentHistory(savedJurado.id, AssignmentHistoryAction.CREATED, adminId, null, juradoId);
-
-      await this.eventPublisher.publish(
-        'admin.supervisor.assigned',
-        {
-          assignmentId: savedJurado.id,
-          supervisorId: savedJurado.supervisorId,
-          supervisorUserId: jurado.userId,
-          studentId: savedJurado.studentId,
-          projectId: savedJurado.projectId,
-          applicationId: savedJurado.applicationId,
-          role: AssignmentRole.JURADO_ANTEPROYECTO,
-          assignedBy: savedJurado.assignedBy,
-        },
-        'admin-service',
-      );
-    }
-
-    return created;
+  assignSupervisor(adminId: string, dto: AssignSupervisorDto, scope: DepartmentScope | null = null): Promise<AssignmentResult> {
+    return this.assignments.assignSupervisor(adminId, dto, scope);
   }
 
-  /**
-   * Asigna jurado(s) final (auto-aceptados, no pueden rechazar).
-   * Igual que con el jurado de anteproyecto, el índice único (studentId, projectId, role)
-   * limita a un jurado activo por rol — si ya existe uno para ese rol, se omite.
-   */
-  async assignJurado(adminId: string, dto: AssignJuradoDto): Promise<SupervisorAssignment[]> {
-    const created: SupervisorAssignment[] = [];
-
-    for (const juradoId of dto.juradoIds) {
-      const jurado = await this.getSupervisorById(juradoId);
-      if (!jurado.isActive) {
-        throw new BadRequestException(`El docente jurado ${juradoId} no está activo`);
-      }
-
-      const existing = await this.assignmentRepo.findOne({
-        where: { studentId: dto.studentId, projectId: dto.projectId, role: dto.role },
-      });
-      if (existing) continue;
-
-      const assignment = this.assignmentRepo.create({
-        supervisorId: juradoId,
-        studentId: dto.studentId,
-        projectId: dto.projectId,
-        applicationId: dto.applicationId,
-        periodId: dto.periodId,
-        startDate: dto.startDate,
-        assignedBy: adminId,
-        role: dto.role,
-        status: AssignmentStatus.ACCEPTED,
-        acceptedAt: new Date(),
-      });
-      const saved = await this.assignmentRepo.save(assignment);
-      created.push(saved);
-      await this.recordAssignmentHistory(saved.id, AssignmentHistoryAction.CREATED, adminId, null, juradoId);
-
-      await this.eventPublisher.publish(
-        'admin.supervisor.assigned',
-        {
-          assignmentId: saved.id,
-          supervisorId: saved.supervisorId,
-          supervisorUserId: jurado.userId,
-          studentId: saved.studentId,
-          projectId: saved.projectId,
-          applicationId: saved.applicationId,
-          role: dto.role,
-          assignedBy: saved.assignedBy,
-        },
-        'admin-service',
-      );
-    }
-
-    return created;
+  /** Asigna jurado(s) final (auto-aceptados). Ver AssignmentWorkflowService. */
+  assignJurado(adminId: string, dto: AssignJuradoDto, scope: DepartmentScope | null = null): Promise<AssignmentResult> {
+    return this.assignments.assignJurado(adminId, dto, scope);
   }
 
   /** El asesor acepta su asignación — recién aquí el proyecto y la postulación pasan a in_progress. */
@@ -849,70 +791,15 @@ export class AdminService implements OnModuleInit {
   }
 
   /** El admin reemplaza al asesor (por ejemplo, tras una solicitud de cambio del estudiante). */
-  async replaceAssignment(
-    assignmentId: string,
-    adminId: string,
-    dto: ReplaceAssignmentDto,
-  ): Promise<SupervisorAssignment> {
-    const old = await this.assignmentRepo.findOne({ where: { id: assignmentId } });
-    if (!old) throw new NotFoundException('Asignación no encontrada');
-    if (old.role !== AssignmentRole.ASESOR) {
-      throw new BadRequestException('Solo se puede reemplazar la asignación del asesor');
-    }
-    if (old.status !== AssignmentStatus.PENDING_ACCEPTANCE && old.status !== AssignmentStatus.ACCEPTED) {
-      throw new BadRequestException(`No se puede reemplazar una asignación en estado "${old.status}"`);
-    }
-
-    const newSupervisor = await this.getSupervisorById(dto.newSupervisorId);
-    if (!newSupervisor.isActive) throw new BadRequestException('El nuevo docente no está activo');
-    const previousSupervisor = await this.getSupervisorById(old.supervisorId);
-
-    old.status = AssignmentStatus.REPLACED;
-    await this.assignmentRepo.save(old);
-    await this.supervisorRepo.decrement({ id: old.supervisorId }, 'currentStudents', 1);
-
-    const replacement = this.assignmentRepo.create({
-      supervisorId: dto.newSupervisorId,
-      studentId: old.studentId,
-      projectId: old.projectId,
-      applicationId: old.applicationId,
-      periodId: old.periodId,
-      startDate: old.startDate,
-      endDate: old.endDate,
-      assignedBy: adminId,
-      role: AssignmentRole.ASESOR,
-      status: AssignmentStatus.PENDING_ACCEPTANCE,
-      notes: dto.reason,
-    });
-    const saved = await this.assignmentRepo.save(replacement);
-    await this.supervisorRepo.increment({ id: dto.newSupervisorId }, 'currentStudents', 1);
-
-    await this.recordAssignmentHistory(old.id, AssignmentHistoryAction.REPLACED, adminId, old.supervisorId, dto.newSupervisorId, dto.reason);
-
-    await this.eventPublisher.publish(
-      'admin.supervisor.replaced',
-      {
-        oldAssignmentId: old.id,
-        newAssignmentId: saved.id,
-        previousSupervisorId: old.supervisorId,
-        previousSupervisorUserId: previousSupervisor.userId,
-        newSupervisorId: dto.newSupervisorId,
-        newSupervisorUserId: newSupervisor.userId,
-        studentId: old.studentId,
-        projectId: old.projectId,
-        applicationId: old.applicationId,
-        reason: dto.reason,
-      },
-      'admin-service',
-    );
-
-    return saved;
+  replaceAssignment(assignmentId: string, adminId: string, dto: ReplaceAssignmentDto, scope: DepartmentScope | null = null): Promise<SupervisorAssignment> {
+    return this.assignments.replaceAssignment(assignmentId, adminId, dto, scope);
   }
 
   /** Desvincula a un jurado al completar su fase (p. ej. anteproyecto aprobado). */
-  async disconnectAssignment(assignmentId: string, adminId: string): Promise<SupervisorAssignment> {
+  async disconnectAssignment(assignmentId: string, adminId: string, scope: DepartmentScope | null = null): Promise<SupervisorAssignment> {
     const assignment = await this.assignmentRepo.findOne({ where: { id: assignmentId } });
     if (!assignment) throw new NotFoundException('Asignación no encontrada');
+    assertInScope(scope, assignment.programId, 'Asignación no encontrada');
     if (assignment.role === AssignmentRole.ASESOR) {
       throw new BadRequestException('El asesor no se desvincula — usa replaceAssignment');
     }
@@ -932,7 +819,11 @@ export class AdminService implements OnModuleInit {
     return saved;
   }
 
-  async getAssignmentHistory(assignmentId: string): Promise<SupervisorAssignmentHistory[]> {
+  async getAssignmentHistory(assignmentId: string, scope: DepartmentScope | null = null): Promise<SupervisorAssignmentHistory[]> {
+    if (scope && !scope.all) {
+      const a = await this.assignmentRepo.findOne({ where: { id: assignmentId } });
+      assertInScope(scope, a?.programId, 'Asignación no encontrada');
+    }
     return this.historyRepo.find({ where: { assignmentId }, order: { createdAt: 'ASC' } });
   }
 
@@ -961,14 +852,16 @@ export class AdminService implements OnModuleInit {
   }
 
   /** Uso interno cross-service (analytics): estadísticas de carga docente y tiempos de aceptación. */
-  async getAssignmentStats(): Promise<{
+  async getAssignmentStats(scope: DepartmentScope | null = null): Promise<{
     totalAssignments: number;
     byRole: Record<string, number>;
     byStatus: Record<string, number>;
     avgAcceptanceHours: number | null;
     supervisorWorkload: { supervisorId: string; supervisorName: string | null; activeCount: number }[];
   }> {
-    const assignments = await this.assignmentRepo.find();
+    const assignments = await this.assignmentRepo.find(
+      scope && !scope.all ? { where: { programId: scope.departmentId } } : undefined,
+    );
 
     const byRole: Record<string, number> = {};
     const byStatus: Record<string, number> = {};
@@ -1346,12 +1239,13 @@ export class AdminService implements OnModuleInit {
       supervisor = this.supervisorRepo.create({ userId: supervisorUserId });
     }
 
+    if (dto.programId) await this.assertActiveProgram(dto.programId);
     Object.assign(supervisor, dto);
 
     // Bug corregido: antes se calculaba isOnboardingReady pero nunca se persistía
     // en el perfil, por lo que el docente nunca aparecía como "listo" para
     // recibir asignaciones aunque hubiera completado su onboarding.
-    const isOnboardingReady = !!(supervisor.employeeCode && supervisor.department && supervisor.role);
+    const isOnboardingReady = !!(supervisor.employeeCode && supervisor.department && supervisor.role && supervisor.programId);
     supervisor.isOnboardingComplete = isOnboardingReady;
 
     const saved = await this.supervisorRepo.save(supervisor);
@@ -1430,36 +1324,48 @@ export class AdminService implements OnModuleInit {
 
   // ─── Plantillas académicas ─────────────────────────────────────────────────────
 
-  async createTemplate(adminId: string, dto: CreateAcademicTemplateDto): Promise<AcademicTemplate> {
+  async createTemplate(adminId: string, dto: CreateAcademicTemplateDto, scope: DepartmentScope | null = null): Promise<AcademicTemplate> {
+    const program = await this.scopeProgram(scope);
+    if (program && dto.programCode !== program.code) {
+      throw new ForbiddenException('Solo puedes registrar plantillas de tu propio departamento.');
+    }
     const template = this.templateRepo.create({ ...dto, createdBy: adminId });
     return this.templateRepo.save(template);
   }
 
-  async getTemplates(programCode?: string, type?: string, onlyActive = false): Promise<AcademicTemplate[]> {
+  async getTemplates(programCode?: string, type?: string, onlyActive = false, scope: DepartmentScope | null = null): Promise<AcademicTemplate[]> {
     const where: FindOptionsWhere<AcademicTemplate> = {};
-    if (programCode) where.programCode = programCode;
+    const program = await this.scopeProgram(scope);
+    if (program) where.programCode = program.code;
+    else if (programCode) where.programCode = programCode;
     if (type) where.type = type as any;
     if (onlyActive) where.isActive = true;
     return this.templateRepo.find({ where, order: { programCode: 'ASC', type: 'ASC' } });
   }
 
-  async getTemplateById(id: string): Promise<AcademicTemplate> {
+  async getTemplateById(id: string, scope: DepartmentScope | null = null): Promise<AcademicTemplate> {
     const template = await this.templateRepo.findOne({ where: { id } });
     if (!template) throw new NotFoundException('Plantilla no encontrada');
+    const program = await this.scopeProgram(scope);
+    if (program && template.programCode !== program.code) throw new NotFoundException('Plantilla no encontrada');
     return template;
   }
 
-  async updateTemplate(id: string, dto: UpdateAcademicTemplateDto): Promise<AcademicTemplate> {
-    const template = await this.getTemplateById(id);
+  async updateTemplate(id: string, dto: UpdateAcademicTemplateDto, scope: DepartmentScope | null = null): Promise<AcademicTemplate> {
+    const template = await this.getTemplateById(id, scope);
     Object.assign(template, dto);
     return this.templateRepo.save(template);
   }
 
   // ─── Documentos requeridos ──────────────────────────────────────────────────────
 
-  async createDocumentRequirement(adminId: string, dto: CreateDocumentRequirementDto): Promise<DocumentRequirement> {
+  async createDocumentRequirement(adminId: string, dto: CreateDocumentRequirementDto, scope: DepartmentScope | null = null): Promise<DocumentRequirement> {
+    // Admin de departamento: siempre para su departamento. Superadmin: global (sin programId) o de un departamento.
+    const programId = scope && !scope.all ? scope.departmentId : dto.programId ?? null;
+    if (programId) await this.assertActiveProgram(programId);
     const requirement = this.documentRequirementRepo.create({
       ...dto,
+      programId,
       projectTypes: dto.projectTypes ?? ['all'],
       createdBy: adminId,
     });
@@ -1471,14 +1377,17 @@ export class AdminService implements OnModuleInit {
     requiredAtStage?: string;
     projectType?: string;
     onlyActive?: boolean;
-  }): Promise<DocumentRequirement[]> {
+  }, scope: DepartmentScope | null = null): Promise<DocumentRequirement[]> {
     const where: FindOptionsWhere<DocumentRequirement> = {};
     if (filters?.actorType) where.actorType = filters.actorType as any;
     if (filters?.requiredAtStage) where.requiredAtStage = filters.requiredAtStage as any;
     if (filters?.onlyActive) where.isActive = true;
 
+    // Admin de departamento: los requisitos globales (solo lectura) + los de su departamento.
     const requirements = await this.documentRequirementRepo.find({
-      where,
+      where: scope && !scope.all
+        ? [{ ...where, programId: IsNull() }, { ...where, programId: scope.departmentId }]
+        : where,
       order: { displayOrder: 'ASC', name: 'ASC' },
     });
 
@@ -1490,21 +1399,38 @@ export class AdminService implements OnModuleInit {
     );
   }
 
-  async getDocumentRequirementById(id: string): Promise<DocumentRequirement> {
+  async getDocumentRequirementById(id: string, scope: DepartmentScope | null = null): Promise<DocumentRequirement> {
     const requirement = await this.documentRequirementRepo.findOne({ where: { id } });
     if (!requirement) throw new NotFoundException('Documento requerido no encontrado');
+    // Visible: global o de su departamento.
+    if (scope && !scope.all && requirement.programId && requirement.programId !== scope.departmentId) {
+      throw new NotFoundException('Documento requerido no encontrado');
+    }
     return requirement;
   }
 
-  async updateDocumentRequirement(id: string, dto: UpdateDocumentRequirementDto): Promise<DocumentRequirement> {
-    const requirement = await this.getDocumentRequirementById(id);
+  async updateDocumentRequirement(id: string, dto: UpdateDocumentRequirementDto, scope: DepartmentScope | null = null): Promise<DocumentRequirement> {
+    const requirement = await this.getDocumentRequirementById(id, scope);
+    if (scope && !scope.all) {
+      if (!requirement.programId) {
+        throw new ForbiddenException('Este requisito es global de la Facultad: solo el administrador de Facultad puede modificarlo.');
+      }
+      delete (dto as { programId?: string }).programId; // no se puede mover a otro departamento
+    } else if (dto.programId) {
+      await this.assertActiveProgram(dto.programId);
+    }
     Object.assign(requirement, dto);
     return this.documentRequirementRepo.save(requirement);
   }
 
   // ─── Catálogo de habilidades ────────────────────────────────────────────────────
 
-  async createSkill(adminId: string, dto: CreateSkillCatalogDto): Promise<SkillCatalog> {
+  async createSkill(adminId: string, dto: CreateSkillCatalogDto, scope: DepartmentScope | null = null): Promise<SkillCatalog> {
+    // Admin de departamento: la habilidad nace asociada solo a su departamento.
+    if (scope && !scope.all) {
+      await this.scopeProgram(scope);
+      dto = { ...dto, programIds: [scope.departmentId] };
+    }
     const normalized = normalizeSkillName(dto.displayName);
     const existing = await this.skillCatalogRepo.findOne({ where: { name: normalized } });
     if (existing) {
@@ -1534,7 +1460,9 @@ export class AdminService implements OnModuleInit {
     category?: SkillCategory;
     search?: string;
     onlyActive?: boolean;
-  }): Promise<SkillCatalog[]> {
+  }, scope: DepartmentScope | null = null): Promise<SkillCatalog[]> {
+    // Admin de departamento: el catálogo de su departamento (no puede pedir el de otro).
+    if (scope && !scope.all) filters = { ...filters, programId: scope.departmentId };
     const where: FindOptionsWhere<SkillCatalog> = {};
     if (filters.category) where.category = filters.category;
     if (filters.onlyActive) where.isActive = true;
@@ -1549,6 +1477,21 @@ export class AdminService implements OnModuleInit {
       skills = skills.filter((s) => s.category === SkillCategory.SOFT_SKILL || mappedIds.has(s.id));
     }
 
+    // Admin de departamento: se anota si puede editarla (exclusiva de su departamento) o solo desvincularla (compartida/blanda).
+    if (scope && !scope.all) {
+      const mappings = await this.skillProgramMappingRepo.find({ where: { skillId: In(skills.map((s) => s.id)) } });
+      const bySkill = new Map<string, string[]>();
+      for (const m of mappings) bySkill.set(m.skillId, [...(bySkill.get(m.skillId) ?? []), m.programId]);
+      return skills.map((sk) => {
+        const ids = bySkill.get(sk.id) ?? [];
+        return Object.assign(sk, {
+          programIds: ids,
+          shared: ids.length > 1,
+          editableByDepartment: ids.length === 1 && ids[0] === scope.departmentId,
+        });
+      });
+    }
+
     return skills;
   }
 
@@ -1558,8 +1501,9 @@ export class AdminService implements OnModuleInit {
     return skill;
   }
 
-  async updateSkill(id: string, dto: UpdateSkillCatalogDto): Promise<SkillCatalog> {
+  async updateSkill(id: string, dto: UpdateSkillCatalogDto, scope: DepartmentScope | null = null): Promise<SkillCatalog> {
     const skill = await this.getSkillById(id);
+    await this.assertSkillEditable(skill.id, scope);
 
     if (dto.displayName) {
       const normalized = normalizeSkillName(dto.displayName);
@@ -1579,18 +1523,37 @@ export class AdminService implements OnModuleInit {
   }
 
   /** Desactiva la habilidad (soft-delete) — permanece válida para datos ya asignados. */
-  async deactivateSkill(id: string): Promise<SkillCatalog> {
+  async deactivateSkill(id: string, scope: DepartmentScope | null = null): Promise<SkillCatalog> {
     const skill = await this.getSkillById(id);
+    await this.assertSkillEditable(skill.id, scope);
     skill.isActive = false;
     return this.skillCatalogRepo.save(skill);
+  }
+
+  /**
+   * Admin de departamento: solo edita/desactiva habilidades EXCLUSIVAS de su departamento.
+   * Una compartida (o sin asociación, p. ej. blanda general) solo la edita la Facultad; el departamento puede desvincularla.
+   */
+  private async assertSkillEditable(skillId: string, scope: DepartmentScope | null): Promise<void> {
+    if (!scope || scope.all) return;
+    const mappings = await this.skillProgramMappingRepo.find({ where: { skillId } });
+    if (!mappings.some((m) => m.programId === scope.departmentId)) {
+      throw new NotFoundException('Habilidad no encontrada en el catálogo');
+    }
+    if (mappings.length > 1) {
+      throw new ForbiddenException('Esta habilidad es compartida con otros departamentos: solo el administrador de Facultad puede editarla. Puedes desvincularla de tu departamento.');
+    }
   }
 
   async getSkillsByProgram(programId: string): Promise<SkillCatalog[]> {
     return this.getSkills({ programId, onlyActive: true });
   }
 
-  async associateSkillPrograms(skillId: string, programIds: string[]): Promise<SkillProgramMapping[]> {
+  async associateSkillPrograms(skillId: string, programIds: string[], scope: DepartmentScope | null = null): Promise<SkillProgramMapping[]> {
     await this.getSkillById(skillId);
+    if (scope && !scope.all && programIds.some((id) => id !== scope.departmentId)) {
+      throw new ForbiddenException('Solo puedes asociar habilidades a tu propio departamento.');
+    }
 
     const existing = await this.skillProgramMappingRepo.find({ where: { skillId } });
     const existingProgramIds = new Set(existing.map((m) => m.programId));
@@ -1604,7 +1567,17 @@ export class AdminService implements OnModuleInit {
     return this.skillProgramMappingRepo.find({ where: { skillId } });
   }
 
-  async disassociateSkillProgram(skillId: string, programId: string): Promise<void> {
+  async disassociateSkillProgram(skillId: string, programId: string, scope: DepartmentScope | null = null): Promise<void> {
+    if (scope && !scope.all) {
+      if (programId !== scope.departmentId) {
+        throw new ForbiddenException('Solo puedes desvincular habilidades de tu propio departamento.');
+      }
+      // Desvincular la ÚNICA asociación dejaría la habilidad huérfana: para eso existe "desactivar".
+      const mappings = await this.skillProgramMappingRepo.find({ where: { skillId } });
+      if (mappings.length <= 1) {
+        throw new ConflictException('Es una habilidad exclusiva de tu departamento: desactívala en lugar de desvincularla.');
+      }
+    }
     await this.skillProgramMappingRepo.delete({ skillId, programId });
   }
 

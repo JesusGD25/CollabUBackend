@@ -1,9 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
+import { ConflictException, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 
 import { AdminService } from './admin.service';
+import { AssignmentWorkflowService } from './assignment-workflow.service';
 import { AcademicPeriod, PeriodStatus } from './entities/academic-period.entity';
 import { AcademicProgram } from './entities/academic-program.entity';
 import { CompanyVerification, VerificationAction } from './entities/company-verification.entity';
@@ -29,9 +30,15 @@ const repoMock = () => ({
   update: jest.fn(),
   increment: jest.fn(),
   decrement: jest.fn(),
+  delete: jest.fn(),
 });
 
 const mockEventPublisher = { publish: jest.fn() };
+const mockAssignments = {
+  assignSupervisor: jest.fn(),
+  assignJurado: jest.fn(),
+  replaceAssignment: jest.fn(),
+};
 const mockHttpClient = {
   get: jest.fn(),
   post: jest.fn(),
@@ -86,6 +93,7 @@ describe('AdminService', () => {
         { provide: getRepositoryToken(SkillProgramMapping), useValue: skillProgramMappingRepo },
         { provide: EventPublisher, useValue: mockEventPublisher },
         { provide: MicroserviceHttpClient, useValue: mockHttpClient },
+        { provide: AssignmentWorkflowService, useValue: mockAssignments },
       ],
     }).compile();
 
@@ -291,97 +299,27 @@ describe('AdminService', () => {
     });
   });
 
-  describe('assignSupervisor', () => {
-    it('should assign supervisor and increment student count', async () => {
-      const supervisor = {
-        id: 'sup-1',
-        isActive: true,
-        currentStudents: 3,
-        maxStudents: 10,
-      };
-      supervisorRepo.findOne.mockResolvedValue(supervisor);
-      assignmentRepo.findOne.mockResolvedValue(null);
-      const dto = {
-        supervisorId: 'sup-1',
-        studentId: 'stu-1',
-        projectId: 'proj-1',
-        applicationId: 'app-1',
-        periodId: 'per-1',
-        startDate: '2025-02-01',
-      };
-      const saved = { id: 'asgn-1', ...dto, assignedBy: 'admin-1', status: 'active' };
-      assignmentRepo.create.mockReturnValue(saved);
-      assignmentRepo.save.mockResolvedValue(saved);
-      supervisorRepo.increment.mockResolvedValue(undefined);
+  // La lógica de asignación vive en AssignmentWorkflowService (ver assignment-workflow.service.spec.ts);
+  // AdminService solo delega.
+  describe('asignaciones (delegación)', () => {
+    it('assignSupervisor delega en AssignmentWorkflowService y devuelve su resultado', async () => {
+      const result = { created: [{ id: 'asgn-1' }], skipped: [] };
+      mockAssignments.assignSupervisor.mockResolvedValue(result);
+      const dto = { supervisorId: 'sup-1' } as any;
 
-      const result = await service.assignSupervisor('admin-1', dto as any);
-
-      expect(supervisorRepo.increment).toHaveBeenCalledWith({ id: 'sup-1' }, 'currentStudents', 1);
-      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
-        'admin.supervisor.assigned',
-        expect.objectContaining({ supervisorId: 'sup-1', studentId: 'stu-1', role: AssignmentRole.ASESOR }),
-        'admin-service',
-      );
-      expect(result[0].id).toBe('asgn-1');
-      // Marca la aplicación como pending_supervisor (espera aceptación del asesor) —
-      // no la avanza a in_progress, eso ocurre solo cuando el asesor acepta.
-      expect(mockHttpClient.patch).toHaveBeenCalledWith(
-        'application',
-        '/internal/applications/app-1/pending-supervisor',
-        {},
-      );
+      await expect(service.assignSupervisor('admin-1', dto)).resolves.toBe(result);
+      expect(mockAssignments.assignSupervisor).toHaveBeenCalledWith('admin-1', dto, null);
     });
 
-    it('should NOT start the project/application immediately — only on acceptance', async () => {
-      const supervisor = { id: 'sup-1', isActive: true, currentStudents: 3, maxStudents: 10 };
-      supervisorRepo.findOne.mockResolvedValue(supervisor);
-      assignmentRepo.findOne.mockResolvedValue(null);
-      const dto = {
-        supervisorId: 'sup-1', studentId: 'stu-1', projectId: 'proj-1',
-        applicationId: 'app-1', periodId: 'per-1', startDate: '2025-02-01',
-      };
-      assignmentRepo.create.mockReturnValue({ id: 'asgn-1', ...dto, status: AssignmentStatus.PENDING_ACCEPTANCE });
-      assignmentRepo.save.mockResolvedValue({ id: 'asgn-1', ...dto, status: AssignmentStatus.PENDING_ACCEPTANCE });
+    it('assignJurado y replaceAssignment delegan', async () => {
+      mockAssignments.assignJurado.mockResolvedValue({ created: [], skipped: [] });
+      mockAssignments.replaceAssignment.mockResolvedValue({ id: 'new' });
 
-      await service.assignSupervisor('admin-1', dto as any);
+      await service.assignJurado('admin-1', { role: 'jurado_final' } as any);
+      await service.replaceAssignment('asgn-1', 'admin-1', { newSupervisorId: 'sup-2' } as any);
 
-      // Marca pending_supervisor (esperado), pero nunca llama a un endpoint que
-      // avance la aplicación a in_progress — eso solo ocurre en acceptAssignment.
-      expect(mockHttpClient.patch).toHaveBeenCalledTimes(1);
-      expect(mockHttpClient.patch).not.toHaveBeenCalledWith(
-        'application',
-        expect.stringContaining('/start'),
-        expect.anything(),
-      );
-    });
-
-    it('should throw BadRequestException if supervisor is not active', async () => {
-      supervisorRepo.findOne.mockResolvedValue({ id: 'sup-1', isActive: false, currentStudents: 0, maxStudents: 10 });
-
-      await expect(
-        service.assignSupervisor('admin-1', { supervisorId: 'sup-1' } as any),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw BadRequestException if supervisor is at max capacity', async () => {
-      supervisorRepo.findOne.mockResolvedValue({ id: 'sup-1', isActive: true, currentStudents: 10, maxStudents: 10 });
-
-      await expect(
-        service.assignSupervisor('admin-1', { supervisorId: 'sup-1' } as any),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should throw ConflictException if student already has supervisor for project', async () => {
-      supervisorRepo.findOne.mockResolvedValue({ id: 'sup-1', isActive: true, currentStudents: 2, maxStudents: 10 });
-      assignmentRepo.findOne.mockResolvedValue({ id: 'existing' });
-
-      await expect(
-        service.assignSupervisor('admin-1', {
-          supervisorId: 'sup-1',
-          studentId: 'stu-1',
-          projectId: 'proj-1',
-        } as any),
-      ).rejects.toThrow(ConflictException);
+      expect(mockAssignments.assignJurado).toHaveBeenCalledTimes(1);
+      expect(mockAssignments.replaceAssignment).toHaveBeenCalledWith('asgn-1', 'admin-1', { newSupervisorId: 'sup-2' }, null);
     });
   });
 
@@ -456,14 +394,16 @@ describe('AdminService', () => {
   });
 
   describe('updateMyProfile (onboarding)', () => {
-    it('should persist isOnboardingComplete=true once employeeCode/department/role are set (bug fix)', async () => {
+    it('should persist isOnboardingComplete=true once employeeCode/department/role/programId are set (bug fix)', async () => {
       const existing = { userId: 'faculty-1', employeeCode: null, department: null, role: null, isOnboardingComplete: false };
       supervisorRepo.findOne.mockResolvedValue(existing);
       supervisorRepo.save.mockImplementation(async (s: any) => s);
+      programRepo.findOne.mockResolvedValue({ id: 'prog-1', isActive: true });
 
       const result = await service.updateMyProfile('faculty-1', {
         employeeCode: 'EMP-1',
         department: 'Ingeniería',
+        programId: 'prog-1',
         role: SupervisorRole.FACULTY_SUPERVISOR,
       } as any);
 
@@ -598,6 +538,131 @@ describe('AdminService', () => {
 
       const result = await service.getDocumentRequirements({ projectType: 'thesis' });
       expect(result.map((r) => r.id)).toEqual(['1', '2']);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ALCANCE POR DEPARTAMENTO
+  // ═══════════════════════════════════════════════════════════════════
+  describe('alcance por departamento', () => {
+    const DEPT_SIS = { all: false as const, departmentId: 'dept-sis' };
+    const SUPER = { all: true as const };
+
+    describe('docentes', () => {
+      it('admin de departamento: lista por defecto solo su departamento', async () => {
+        supervisorRepo.find.mockResolvedValue([]);
+        await service.getSupervisors(undefined, undefined, DEPT_SIS);
+        expect(supervisorRepo.find).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ programId: 'dept-sis' }) }));
+      });
+
+      it('con includeOtherDepartments ve todos y los de otro departamento quedan marcados crossDepartment', async () => {
+        supervisorRepo.find.mockResolvedValue([
+          { id: 's1', userId: 'u1', programId: 'dept-sis' },
+          { id: 's2', userId: 'u2', programId: 'dept-ele' },
+        ]);
+        mockHttpClient.post.mockResolvedValue([]);
+        const res = await service.getSupervisors(undefined, undefined, DEPT_SIS, true);
+        const where = supervisorRepo.find.mock.calls.at(-1)[0].where;
+        expect(where).not.toHaveProperty('programId');
+        expect(res.map((r: any) => r.crossDepartment)).toEqual([false, true]);
+      });
+
+      it('admin de departamento crea docentes siempre en SU departamento (ignora el que mande)', async () => {
+        supervisorRepo.findOne.mockResolvedValue(null);
+        programRepo.findOne.mockResolvedValue({ id: 'dept-sis', isActive: true });
+        supervisorRepo.create.mockImplementation((v: any) => v);
+        supervisorRepo.save.mockImplementation(async (v: any) => v);
+        const res = await service.createSupervisor({ userId: 'u', programId: 'dept-ele' } as any, DEPT_SIS);
+        expect(res.programId).toBe('dept-sis');
+      });
+    });
+
+    describe('plantillas', () => {
+      beforeEach(() => programRepo.findOne.mockResolvedValue({ id: 'dept-sis', code: 'ING-SIS', isActive: true }));
+
+      it('no puede crear una plantilla de otro departamento', async () => {
+        await expect(
+          service.createTemplate('a1', { programCode: 'ING-ELE', type: 'anteproyecto', name: 'x', fileId: 'f' } as any, DEPT_SIS),
+        ).rejects.toThrow(ForbiddenException);
+      });
+
+      it('la lista queda forzada al código de su programa', async () => {
+        templateRepo.find.mockResolvedValue([]);
+        await service.getTemplates('ING-ELE', undefined, false, DEPT_SIS);
+        expect(templateRepo.find).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ programCode: 'ING-SIS' }) }));
+      });
+
+      it('una plantilla de otro departamento es 404', async () => {
+        templateRepo.findOne.mockResolvedValue({ id: 't', programCode: 'ING-ELE' });
+        await expect(service.getTemplateById('t', DEPT_SIS)).rejects.toThrow(NotFoundException);
+      });
+    });
+
+    describe('documentos requeridos', () => {
+      it('un requisito GLOBAL no lo modifica el admin de departamento (403)', async () => {
+        documentRequirementRepo.findOne.mockResolvedValue({ id: 'r', programId: null });
+        await expect(service.updateDocumentRequirement('r', { name: 'x' } as any, DEPT_SIS)).rejects.toThrow(ForbiddenException);
+      });
+
+      it('el admin de departamento crea requisitos de su departamento', async () => {
+        programRepo.findOne.mockResolvedValue({ id: 'dept-sis', isActive: true });
+        documentRequirementRepo.create.mockImplementation((v: any) => v);
+        documentRequirementRepo.save.mockImplementation(async (v: any) => v);
+        const res = await service.createDocumentRequirement('a1', { name: 'x', programId: 'dept-ele' } as any, DEPT_SIS);
+        expect(res.programId).toBe('dept-sis');
+      });
+
+      it('el superadmin crea requisitos globales (sin programId)', async () => {
+        documentRequirementRepo.create.mockImplementation((v: any) => v);
+        documentRequirementRepo.save.mockImplementation(async (v: any) => v);
+        const res = await service.createDocumentRequirement('f1', { name: 'x' } as any, SUPER);
+        expect(res.programId).toBeNull();
+      });
+    });
+
+    describe('habilidades', () => {
+      it('compartida con otro departamento: el admin de departamento NO la edita (403) pero sí puede desvincularla', async () => {
+        skillCatalogRepo.findOne.mockResolvedValue({ id: 'k', name: 'x' });
+        skillProgramMappingRepo.find.mockResolvedValue([
+          { skillId: 'k', programId: 'dept-sis' },
+          { skillId: 'k', programId: 'dept-ele' },
+        ]);
+        await expect(service.updateSkill('k', { displayName: 'Y' } as any, DEPT_SIS)).rejects.toThrow(ForbiddenException);
+        await expect(service.disassociateSkillProgram('k', 'dept-sis', DEPT_SIS)).resolves.toBeUndefined();
+        expect(skillProgramMappingRepo.delete).toHaveBeenCalledWith({ skillId: 'k', programId: 'dept-sis' });
+      });
+
+      it('exclusiva del departamento: la edita, pero no puede desvincular su única asociación (usar desactivar)', async () => {
+        skillCatalogRepo.findOne.mockResolvedValue({ id: 'k', name: 'x', displayName: 'X' });
+        skillProgramMappingRepo.find.mockResolvedValue([{ skillId: 'k', programId: 'dept-sis' }]);
+        skillCatalogRepo.save.mockImplementation(async (v: any) => v);
+        await expect(service.updateSkill('k', { displayName: 'X' } as any, DEPT_SIS)).resolves.toBeDefined();
+        await expect(service.disassociateSkillProgram('k', 'dept-sis', DEPT_SIS)).rejects.toThrow(ConflictException);
+      });
+
+      it('habilidad de otro departamento es 404 para el admin de departamento', async () => {
+        skillCatalogRepo.findOne.mockResolvedValue({ id: 'k' });
+        skillProgramMappingRepo.find.mockResolvedValue([{ skillId: 'k', programId: 'dept-ele' }]);
+        await expect(service.deactivateSkill('k', DEPT_SIS)).rejects.toThrow(NotFoundException);
+      });
+
+      it('no puede desvincular ni asociar otro departamento distinto al suyo', async () => {
+        await expect(service.disassociateSkillProgram('k', 'dept-ele', DEPT_SIS)).rejects.toThrow(ForbiddenException);
+        skillCatalogRepo.findOne.mockResolvedValue({ id: 'k' });
+        await expect(service.associateSkillPrograms('k', ['dept-ele'], DEPT_SIS)).rejects.toThrow(ForbiddenException);
+      });
+
+      it('al crear una habilidad queda asociada solo a su departamento', async () => {
+        skillCatalogRepo.findOne.mockResolvedValue(null);
+        skillCatalogRepo.create.mockImplementation((v: any) => ({ id: 'new', ...v }));
+        skillCatalogRepo.save.mockImplementation(async (v: any) => v);
+        programRepo.findOne.mockResolvedValue({ id: 'dept-sis', isActive: true });
+        skillProgramMappingRepo.create.mockImplementation((v: any) => v);
+        skillProgramMappingRepo.save.mockImplementation(async (v: any) => v);
+        await service.createSkill('a1', { displayName: 'Nueva', category: 'tool', programIds: ['dept-ele'] } as any, DEPT_SIS);
+        expect(skillProgramMappingRepo.create).toHaveBeenCalledWith(expect.objectContaining({ programId: 'dept-sis' }));
+        expect(skillProgramMappingRepo.create).not.toHaveBeenCalledWith(expect.objectContaining({ programId: 'dept-ele' }));
+      });
     });
   });
 });

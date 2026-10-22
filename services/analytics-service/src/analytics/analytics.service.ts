@@ -4,8 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
-import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
+import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, IsNull } from 'typeorm';
+import { EventPublisher, MicroserviceHttpClient, DepartmentScope } from '@collab-u/shared';
 
 import { ProjectMetrics } from './entities/project-metrics.entity';
 import { StudentMetrics } from './entities/student-metrics.entity';
@@ -14,7 +14,7 @@ import { PlatformMetrics } from './entities/platform-metrics.entity';
 import { SkillTrend } from './entities/skill-trend.entity';
 import { Report, ReportType } from './entities/report.entity';
 
-import { MetricsQueryDto, GenerateReportDto } from './dto';
+import { MetricsQueryDto, GenerateReportDto, SkillTrendsQueryDto } from './dto';
 
 // ─── Formas de respuesta de los endpoints internos agregados (contrato congelado en §1.5 del planning) ──
 
@@ -89,22 +89,41 @@ export class AnalyticsService {
     private readonly httpClient: MicroserviceHttpClient,
   ) {}
 
+  /**
+   * Departamento efectivo de una consulta: el admin de departamento SIEMPRE queda en el suyo (ignora lo que
+   * pida); el superadmin y los demás roles usan el `programId` solicitado, o null = toda la Facultad.
+   */
+  private effectiveProgram(scope: DepartmentScope | null | undefined, requested?: string | null): string | null {
+    if (scope && !scope.all) return scope.departmentId;
+    return requested || null;
+  }
+
+  private programWhere(programId: string | null) {
+    return programId ? programId : IsNull();
+  }
+
   // ─── Dashboard ──────────────────────────────────────────────────────────────
 
-  async getDashboard() {
+  async getDashboard(scope: DepartmentScope | null = null, requestedProgramId?: string) {
+    const programId = this.effectiveProgram(scope, requestedProgramId);
+    const programFilter = this.programWhere(programId);
+    const latestSkillDate = await this.latestSkillSnapshotDate(programId);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const [latestPlatformArr, topSkills, recentReports] = await Promise.all([
       this.platformMetricsRepo.find({
+        where: { programId: programFilter as any },
         order: { snapshotDate: 'DESC' },
         take: 1,
       }),
       this.skillTrendRepo.find({
+        where: { programId: programFilter as any, ...(latestSkillDate ? { snapshotDate: latestSkillDate as any } : {}) },
         order: { demandCount: 'DESC' },
         take: 10,
       }),
       this.reportRepo.find({
+        where: scope && !scope.all ? { programId: scope.departmentId } : {},
         order: { createdAt: 'DESC' },
         take: 5,
       }),
@@ -115,7 +134,7 @@ export class AnalyticsService {
 
     const [platformThisMonthArr] = await Promise.all([
       this.platformMetricsRepo.find({
-        where: { snapshotDate: MoreThanOrEqual(thirtyDaysAgo) as any },
+        where: { snapshotDate: MoreThanOrEqual(thirtyDaysAgo) as any, programId: programFilter as any },
         order: { snapshotDate: 'ASC' },
         take: 1,
       }),
@@ -140,6 +159,7 @@ export class AnalyticsService {
         : latestPlatform?.totalApplications ?? 0;
 
     return {
+      scope: { programId },
       platformMetrics: {
         totalUsers: latestPlatform?.totalUsers ?? 0,
         totalStudents: latestPlatform?.totalStudents ?? 0,
@@ -161,6 +181,7 @@ export class AnalyticsService {
         supply: s.supplyCount,
         gap: s.gapIndex != null ? Number(s.gapIndex) : null,
         trend: s.trendDirection,
+        category: s.category,
       })),
       recentReports: recentReports.map((r) => ({
         id: r.id,
@@ -174,8 +195,9 @@ export class AnalyticsService {
 
   // ─── Platform Metrics (serie histórica — depende de las filas escritas por el cron, ver AnalyticsCronService) ──
 
-  async getPlatformMetrics(query: MetricsQueryDto): Promise<PlatformMetrics[]> {
+  async getPlatformMetrics(query: MetricsQueryDto, scope: DepartmentScope | null = null): Promise<PlatformMetrics[]> {
     const where = this.buildDateRange(query);
+    where.programId = this.programWhere(this.effectiveProgram(scope, query.programId));
     return this.platformMetricsRepo.find({
       where,
       order: { snapshotDate: 'DESC' },
@@ -183,12 +205,16 @@ export class AnalyticsService {
     });
   }
 
-  async recordPlatformSnapshot(data: Partial<PlatformMetrics>, snapshotDate?: Date): Promise<PlatformMetrics> {
+  async recordPlatformSnapshot(
+    data: Partial<PlatformMetrics>,
+    snapshotDate?: Date,
+    programId: string | null = null,
+  ): Promise<PlatformMetrics> {
     const today = snapshotDate ?? new Date();
     today.setHours(0, 0, 0, 0);
 
     const existing = await this.platformMetricsRepo.findOne({
-      where: { snapshotDate: today as any },
+      where: { snapshotDate: today as any, programId: this.programWhere(programId) as any },
     });
 
     if (existing) {
@@ -198,6 +224,7 @@ export class AnalyticsService {
 
     const snapshot = this.platformMetricsRepo.create({
       ...data,
+      programId,
       snapshotDate: today,
     });
     return this.platformMetricsRepo.save(snapshot);
@@ -493,29 +520,51 @@ export class AnalyticsService {
    * sin filtrar por fecha, "top skills" y "tendencias" mezclarían todos los días y repetirían
    * cada habilidad tantas veces como snapshots existan.
    */
-  private async latestSkillSnapshotDate(): Promise<SkillTrend['snapshotDate'] | null> {
-    const latest = await this.skillTrendRepo.findOne({ where: {}, order: { snapshotDate: 'DESC' } });
+  private async latestSkillSnapshotDate(programId: string | null = null): Promise<SkillTrend['snapshotDate'] | null> {
+    const latest = await this.skillTrendRepo.findOne({
+      where: { programId: this.programWhere(programId) as any },
+      order: { snapshotDate: 'DESC' },
+    });
     return latest?.snapshotDate ?? null;
   }
 
-  async getSkillTrends(query: MetricsQueryDto): Promise<SkillTrend[]> {
-    const where = this.buildDateRange(query);
-    // Sin rango explícito se devuelve el estado actual (último snapshot), no el histórico mezclado.
-    if (!query.from && !query.to) {
-      const latest = await this.latestSkillSnapshotDate();
-      if (latest) where.snapshotDate = latest;
+  /**
+   * Oferta vs demanda de habilidades con filtros: departamento, categoría, texto, orden y tope.
+   * Admin de departamento → siempre su departamento. Sin rango de fechas devuelve el último snapshot.
+   */
+  async getSkillTrends(query: SkillTrendsQueryDto, scope: DepartmentScope | null = null): Promise<SkillTrend[]> {
+    const programId = this.effectiveProgram(scope, query.programId);
+    const qb = this.skillTrendRepo.createQueryBuilder('t');
+    qb.where(programId ? 't.program_id = :programId' : 't.program_id IS NULL', { programId });
+
+    if (query.from && query.to) {
+      qb.andWhere('t.snapshot_date BETWEEN :from AND :to', { from: query.from, to: query.to });
+    } else if (query.from) {
+      qb.andWhere('t.snapshot_date >= :from', { from: query.from });
+    } else if (query.to) {
+      qb.andWhere('t.snapshot_date <= :to', { to: query.to });
+    } else {
+      // Sin rango explícito se devuelve el estado actual (último snapshot), no el histórico mezclado.
+      const latest = await this.latestSkillSnapshotDate(programId);
+      if (latest) qb.andWhere('t.snapshot_date = :latest', { latest });
     }
-    return this.skillTrendRepo.find({
-      where,
-      order: { gapIndex: 'DESC' },
-      take: 50,
-    });
+    if (query.category) qb.andWhere('t.category = :category', { category: query.category });
+    if (query.search) qb.andWhere('t.skill_name ILIKE :search', { search: `%${query.search}%` });
+
+    const sortColumn = { gap: 't.gap_index', demand: 't.demand_count', supply: 't.supply_count', name: 't.skill_name' }[
+      query.sort ?? 'gap'
+    ];
+    qb.orderBy(sortColumn, (query.order ?? (query.sort === 'name' ? 'asc' : 'desc')).toUpperCase() as 'ASC' | 'DESC');
+    qb.addOrderBy('t.skill_name', 'ASC');
+    qb.take(Math.min(200, Math.max(1, query.limit ?? 50)));
+    return qb.getMany();
   }
 
-  async getTopDemandedSkills(limit = 10): Promise<SkillTrend[]> {
-    const latest = await this.latestSkillSnapshotDate();
+  async getTopDemandedSkills(limit = 10, scope: DepartmentScope | null = null, requestedProgramId?: string): Promise<SkillTrend[]> {
+    const programId = this.effectiveProgram(scope, requestedProgramId);
+    const latest = await this.latestSkillSnapshotDate(programId);
     return this.skillTrendRepo.find({
-      where: latest ? { snapshotDate: latest } : {},
+      where: { programId: this.programWhere(programId) as any, ...(latest ? { snapshotDate: latest as any } : {}) },
       order: { demandCount: 'DESC' },
       take: limit,
     });
@@ -524,12 +573,13 @@ export class AnalyticsService {
   async upsertSkillTrend(
     skillName: string,
     data: Partial<SkillTrend>,
+    programId: string | null = null,
   ): Promise<SkillTrend> {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const existing = await this.skillTrendRepo.findOne({
-      where: { skillName, snapshotDate: today as any },
+      where: { skillName, snapshotDate: today as any, programId: this.programWhere(programId) as any },
     });
 
     if (existing) {
@@ -540,6 +590,7 @@ export class AnalyticsService {
     const trend = this.skillTrendRepo.create({
       skillName,
       ...data,
+      programId,
       snapshotDate: today,
     });
     return this.skillTrendRepo.save(trend);
@@ -547,7 +598,11 @@ export class AnalyticsService {
 
   // ─── Reports ─────────────────────────────────────────────────────────────────
 
-  async generateReport(generatedBy: string, dto: GenerateReportDto): Promise<Report> {
+  async generateReport(generatedBy: string, dto: GenerateReportDto, scope: DepartmentScope | null = null): Promise<Report> {
+    // El reporte hereda el departamento: admin de departamento → el suyo; superadmin → el elegido o la Facultad.
+    const programId = this.effectiveProgram(scope, dto.programId);
+    dto = { ...dto, programId: programId ?? undefined };
+    if (scope && !scope.all) await this.assertEntityInDepartment(dto, scope.departmentId);
     let reportData: Record<string, any>;
     let status: 'completed' | 'failed' = 'completed';
 
@@ -564,6 +619,7 @@ export class AnalyticsService {
       reportType: dto.reportType as ReportType,
       generatedBy,
       periodId: dto.periodId ?? null,
+      programId,
       entityId: dto.entityId ?? null,
       parameters: dto.parameters ?? null,
       data: reportData,
@@ -589,8 +645,48 @@ export class AnalyticsService {
     return saved;
   }
 
-  async getReports(query: MetricsQueryDto): Promise<Report[]> {
+  /**
+   * Un reporte de UNA entidad (empresa, estudiante o docente) solo puede pedirlo un admin de departamento
+   * si esa entidad pertenece a su departamento. Fuera de alcance → 404, igual que en el resto de servicios.
+   */
+  private async assertEntityInDepartment(dto: GenerateReportDto, departmentId: string): Promise<void> {
+    const id = dto.entityId;
+    if (!id) return;
+    let programIds: string[] | null = null;
+    switch (dto.reportType) {
+      case 'company_performance': {
+        const info = await this.httpClient
+          .get<{ programIds?: string[] }>('company', `/internal/companies/${id}/basic-info`)
+          .catch(() => null);
+        programIds = info ? (info.programIds ?? []) : null;
+        break;
+      }
+      case 'student_outcomes': {
+        const data = await this.httpClient
+          .get<{ programId?: string | null }>('student', `/internal/students/${id}/matching-data`)
+          .catch(() => null);
+        programIds = data ? (data.programId ? [data.programId] : []) : null;
+        break;
+      }
+      case 'supervisor_report': {
+        const sup = await this.httpClient
+          .get<{ programId?: string | null }>('admin', `/internal/admin/supervisors/${id}`)
+          .catch(() => null);
+        programIds = sup ? (sup.programId ? [sup.programId] : []) : null;
+        break;
+      }
+      default:
+        return;
+    }
+    if (!programIds || !programIds.includes(departmentId)) {
+      throw new NotFoundException('La entidad solicitada no existe en tu departamento.');
+    }
+  }
+
+  async getReports(query: MetricsQueryDto, scope: DepartmentScope | null = null): Promise<Report[]> {
     const where = this.buildDateRange(query);
+    // Admin de departamento: solo los reportes de su departamento.
+    if (scope && !scope.all) where.programId = scope.departmentId;
     return this.reportRepo.find({
       where,
       order: { createdAt: 'DESC' },
@@ -598,9 +694,9 @@ export class AnalyticsService {
     });
   }
 
-  async getReport(id: string): Promise<Report> {
+  async getReport(id: string, scope: DepartmentScope | null = null): Promise<Report> {
     const report = await this.reportRepo.findOne({ where: { id } });
-    if (!report) {
+    if (!report || (scope && !scope.all && report.programId !== scope.departmentId)) {
       throw new NotFoundException(`Reporte ${id} no encontrado`);
     }
     return report;
@@ -617,48 +713,71 @@ export class AnalyticsService {
    * se calculan bajo demanda (ver arriba).
    */
   async runDailyAggregation(): Promise<void> {
+    // Total de la Facultad + una pasada por cada departamento activo (mismos fetchers, filtrados por programId).
+    await this.aggregateScope(null);
+    const programs = await this.httpClient
+      .get<{ id: string; isActive?: boolean }[]>('admin', '/internal/admin/programs')
+      .catch((err) => {
+        this.logger.warn(`No se pudo obtener el catálogo de departamentos: ${err.message}`);
+        return [] as { id: string; isActive?: boolean }[];
+      });
+    for (const program of (Array.isArray(programs) ? programs : []).filter((p) => p.isActive !== false)) {
+      try {
+        await this.aggregateScope(program.id);
+      } catch (err) {
+        this.logger.error(`Agregación del departamento ${program.id} falló: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private async aggregateScope(programId: string | null): Promise<void> {
+    const pid = programId ?? undefined;
     const [projectStats, appStats, studentStats, companyStats, matchingStats, demand, supply] =
       await Promise.all([
-        this.fetchProjectStats({}),
-        this.fetchApplicationStats({}),
-        this.fetchStudentStats(),
-        this.fetchCompanyStats(),
-        this.fetchMatchingStats(),
-        this.fetchSkillDemand(),
-        this.fetchSkillSupply(),
+        this.fetchProjectStats({ programId: pid }),
+        this.fetchApplicationStats({ programId: pid }),
+        this.fetchStudentStats(undefined, undefined, pid),
+        this.fetchCompanyStats(undefined, undefined, pid),
+        // El score de matching no se calcula por departamento: solo el total de la Facultad lo lleva.
+        programId ? Promise.resolve(null) : this.fetchMatchingStats(),
+        this.fetchSkillDemand(pid),
+        this.fetchSkillSupply(pid),
       ]);
 
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const [projectStats24h, studentStats24h, companyStats24h] = await Promise.all([
-      this.fetchProjectStats({ from: yesterday.toISOString() }),
-      this.fetchStudentStats(yesterday.toISOString()),
-      this.fetchCompanyStats(yesterday.toISOString()),
+      this.fetchProjectStats({ from: yesterday.toISOString(), programId: pid }),
+      this.fetchStudentStats(yesterday.toISOString(), undefined, pid),
+      this.fetchCompanyStats(yesterday.toISOString(), undefined, pid),
     ]);
 
     // totalUsers no tiene endpoint propio (user-service no está en el contrato §1.5) — se aproxima con
     // estudiantes + empresas, documentado como subconteo conocido (excluye cuentas admin/faculty).
     const totalUsers = (studentStats?.totalCreated ?? 0) + (companyStats?.totalCreated ?? 0);
-    // de período (últimas 24h respecto al corte anterior) — mismo subconteo conocido que totalUsers.
     const newUsersPeriod = (studentStats24h?.totalCreated ?? 0) + (companyStats24h?.totalCreated ?? 0);
 
-    await this.recordPlatformSnapshot({
-      totalUsers,
-      totalStudents: studentStats?.totalCreated ?? 0,
-      totalCompanies: companyStats?.totalCreated ?? 0,
-      totalProjects: projectStats?.totalCreated ?? 0,
-      totalApplications: appStats?.total ?? 0,
-      activeProjects: projectStats?.activeCount ?? 0,
-      avgMatchScore: matchingStats?.avgOverallScore ?? null,
-      avgTimeToFillDays: projectStats?.avgTimeToFillDays ?? null,
-      newUsersPeriod,
-      newProjectsPeriod: projectStats24h?.totalCreated ?? 0,
-    });
+    await this.recordPlatformSnapshot(
+      {
+        totalUsers,
+        totalStudents: studentStats?.totalCreated ?? 0,
+        totalCompanies: companyStats?.totalCreated ?? 0,
+        totalProjects: projectStats?.totalCreated ?? 0,
+        totalApplications: appStats?.total ?? 0,
+        activeProjects: projectStats?.activeCount ?? 0,
+        avgMatchScore: matchingStats?.avgOverallScore ?? null,
+        avgTimeToFillDays: projectStats?.avgTimeToFillDays ?? null,
+        newUsersPeriod,
+        newProjectsPeriod: projectStats24h?.totalCreated ?? 0,
+      },
+      undefined,
+      programId,
+    );
 
-    await this.upsertSkillTrends(demand, supply);
+    await this.upsertSkillTrends(demand, supply, programId);
 
     this.logger.log(
-      `Snapshot diario persistido: ${projectStats?.totalCreated ?? 0} proyectos, ${studentStats?.totalCreated ?? 0} estudiantes, ${companyStats?.totalCreated ?? 0} empresas, ${appStats?.total ?? 0} aplicaciones, ${Object.keys(demand ?? {}).length + Object.keys(supply ?? {}).length > 0 ? 'skills OK' : 'sin datos de skills'}.`,
+      `Snapshot diario (${programId ?? 'Facultad'}): ${projectStats?.totalCreated ?? 0} proyectos, ${studentStats?.totalCreated ?? 0} estudiantes, ${companyStats?.totalCreated ?? 0} empresas, ${appStats?.total ?? 0} aplicaciones, ${Object.keys(demand ?? {}).length + Object.keys(supply ?? {}).length > 0 ? 'skills OK' : 'sin datos de skills'}.`,
     );
   }
 
@@ -676,55 +795,70 @@ export class AnalyticsService {
    */
   async runHistoricalAggregation(snapshotDates: string[]): Promise<{ written: number }> {
     const sorted = [...snapshotDates].sort();
-    let previousDate: string | null = null;
     let written = 0;
 
-    for (const dateStr of sorted) {
-      const [projectStats, appStats, studentStats, companyStats] = await Promise.all([
-        this.fetchProjectStats({ to: dateStr }),
-        this.fetchApplicationStats({ to: dateStr }),
-        this.fetchStudentStats(undefined, dateStr),
-        this.fetchCompanyStats(undefined, dateStr),
-      ]);
+    // La serie de la Facultad (null) y una serie por departamento activo: los acumulativos se calculan con el
+    // mismo filtro `programId` que usa la agregación diaria, así que cada serie es real para su departamento.
+    const programs = await this.httpClient
+      .get<{ id: string; isActive?: boolean }[]>('admin', '/internal/admin/programs')
+      .catch(() => null);
+    const scopes: (string | null)[] = [
+      null,
+      ...(Array.isArray(programs) ? programs : []).filter((p) => p.isActive !== false).map((p) => p.id),
+    ];
 
-      const [projectStatsPeriod, studentStatsPeriod, companyStatsPeriod] = await Promise.all([
-        this.fetchProjectStats({ from: previousDate ?? undefined, to: dateStr }),
-        this.fetchStudentStats(previousDate ?? undefined, dateStr),
-        this.fetchCompanyStats(previousDate ?? undefined, dateStr),
-      ]);
+    for (const programId of scopes) {
+      const pid = programId ?? undefined;
+      let previousDate: string | null = null;
+      for (const dateStr of sorted) {
+        const [projectStats, appStats, studentStats, companyStats] = await Promise.all([
+          this.fetchProjectStats({ to: dateStr, programId: pid }),
+          this.fetchApplicationStats({ to: dateStr, programId: pid }),
+          this.fetchStudentStats(undefined, dateStr, pid),
+          this.fetchCompanyStats(undefined, dateStr, pid),
+        ]);
 
-      const totalUsers = (studentStats?.totalCreated ?? 0) + (companyStats?.totalCreated ?? 0);
-      const newUsersPeriod = (studentStatsPeriod?.totalCreated ?? 0) + (companyStatsPeriod?.totalCreated ?? 0);
+        const [projectStatsPeriod, studentStatsPeriod, companyStatsPeriod] = await Promise.all([
+          this.fetchProjectStats({ from: previousDate ?? undefined, to: dateStr, programId: pid }),
+          this.fetchStudentStats(previousDate ?? undefined, dateStr, pid),
+          this.fetchCompanyStats(previousDate ?? undefined, dateStr, pid),
+        ]);
 
-      await this.recordPlatformSnapshot(
-        {
-          totalUsers,
-          totalStudents: studentStats?.totalCreated ?? 0,
-          totalCompanies: companyStats?.totalCreated ?? 0,
-          totalProjects: projectStats?.totalCreated ?? 0,
-          totalApplications: appStats?.total ?? 0,
-          // activeProjects se omite (no se fabrica 0): es un campo puntual sobre estado no
-          // historizado, cae en el default de columna (0) que no debe leerse como "sabemos que era
-          // cero", sino como "no calculado para esta fecha histórica" — ver comentario del método.
-          avgMatchScore: null,
-          avgTimeToFillDays: null,
-          newUsersPeriod,
-          newProjectsPeriod: projectStatsPeriod?.totalCreated ?? 0,
-        },
-        new Date(dateStr),
-      );
+        const totalUsers = (studentStats?.totalCreated ?? 0) + (companyStats?.totalCreated ?? 0);
+        const newUsersPeriod = (studentStatsPeriod?.totalCreated ?? 0) + (companyStatsPeriod?.totalCreated ?? 0);
 
-      written += 1;
-      previousDate = dateStr;
+        await this.recordPlatformSnapshot(
+          {
+            totalUsers,
+            totalStudents: studentStats?.totalCreated ?? 0,
+            totalCompanies: companyStats?.totalCreated ?? 0,
+            totalProjects: projectStats?.totalCreated ?? 0,
+            totalApplications: appStats?.total ?? 0,
+            // activeProjects se omite (no se fabrica 0): es un campo puntual sobre estado no
+            // historizado, cae en el default de columna (0) que no debe leerse como "sabemos que era
+            // cero", sino como "no calculado para esta fecha histórica" — ver comentario del método.
+            avgMatchScore: null,
+            avgTimeToFillDays: null,
+            newUsersPeriod,
+            newProjectsPeriod: projectStatsPeriod?.totalCreated ?? 0,
+          },
+          new Date(dateStr),
+          programId,
+        );
+
+        if (programId === null) written += 1; // el conteo reporta las fechas (serie de la Facultad)
+        previousDate = dateStr;
+      }
     }
 
-    this.logger.log(`Backfill histórico completado: ${written} snapshots de platform_metrics escritos.`);
+    this.logger.log(`Backfill histórico completado: ${written} fechas × ${scopes.length} series (Facultad + departamentos).`);
     return { written };
   }
 
   private async upsertSkillTrends(
     demand: Record<string, SkillAggregateEntry> | null,
     supply: Record<string, SkillAggregateEntry> | null,
+    programId: string | null = null,
   ): Promise<void> {
     const keys = new Set([...Object.keys(demand ?? {}), ...Object.keys(supply ?? {})]);
     const yesterday = new Date();
@@ -744,7 +878,7 @@ export class AnalyticsService {
       const gapIndex = demandCount - supplyCount;
 
       const previous = await this.skillTrendRepo.findOne({
-        where: { skillName, snapshotDate: yesterday as any },
+        where: { skillName, snapshotDate: yesterday as any, programId: this.programWhere(programId) as any },
       });
       let trendDirection: 'rising' | 'stable' | 'declining' | null = null;
       if (previous?.gapIndex != null) {
@@ -756,12 +890,13 @@ export class AnalyticsService {
 
       await this.upsertSkillTrend(skillName, {
         catalogSkillId,
+        category: d?.category ?? s?.category ?? null,
         demandCount,
         supplyCount,
         gapIndex,
         avgProficiencyLevel: s?.avgProficiencyLevel ?? null,
         trendDirection,
-      });
+      }, programId);
     }
   }
 
@@ -791,6 +926,7 @@ export class AnalyticsService {
     projectId?: string;
     companyId?: string;
     studentId?: string;
+    programId?: string;
     from?: string;
     to?: string;
   }): Promise<ApplicationStats | null> {
@@ -805,6 +941,7 @@ export class AnalyticsService {
 
   private async fetchProjectStats(params: {
     companyId?: string;
+    programId?: string;
     from?: string;
     to?: string;
   }): Promise<ProjectStats | null> {
@@ -817,8 +954,8 @@ export class AnalyticsService {
       });
   }
 
-  private async fetchStudentStats(from?: string, to?: string): Promise<StudentStats | null> {
-    const qs = this.toQueryString({ from, to });
+  private async fetchStudentStats(from?: string, to?: string, programId?: string): Promise<StudentStats | null> {
+    const qs = this.toQueryString({ from, to, programId });
     return this.httpClient
       .get<StudentStats>('student', `/internal/students/analytics/stats${qs}`)
       .catch((err) => {
@@ -827,8 +964,8 @@ export class AnalyticsService {
       });
   }
 
-  private async fetchCompanyStats(from?: string, to?: string): Promise<CompanyStats | null> {
-    const qs = this.toQueryString({ from, to });
+  private async fetchCompanyStats(from?: string, to?: string, programId?: string): Promise<CompanyStats | null> {
+    const qs = this.toQueryString({ from, to, programId });
     return this.httpClient
       .get<CompanyStats>('company', `/internal/companies/analytics/stats${qs}`)
       .catch((err) => {
@@ -863,18 +1000,18 @@ export class AnalyticsService {
       });
   }
 
-  private async fetchSkillDemand(): Promise<Record<string, SkillAggregateEntry> | null> {
+  private async fetchSkillDemand(programId?: string): Promise<Record<string, SkillAggregateEntry> | null> {
     return this.httpClient
-      .get<Record<string, SkillAggregateEntry>>('project', '/internal/projects/skills/demand')
+      .get<Record<string, SkillAggregateEntry>>('project', `/internal/projects/skills/demand${this.toQueryString({ programId })}`)
       .catch((err) => {
         this.logger.warn(`No se pudo obtener demanda de skills: ${err.message}`);
         return null;
       });
   }
 
-  private async fetchSkillSupply(): Promise<Record<string, SkillAggregateEntry> | null> {
+  private async fetchSkillSupply(programId?: string): Promise<Record<string, SkillAggregateEntry> | null> {
     return this.httpClient
-      .get<Record<string, SkillAggregateEntry>>('student', '/internal/students/skills/supply')
+      .get<Record<string, SkillAggregateEntry>>('student', `/internal/students/skills/supply${this.toQueryString({ programId })}`)
       .catch((err) => {
         this.logger.warn(`No se pudo obtener oferta de skills: ${err.message}`);
         return null;
@@ -924,8 +1061,10 @@ export class AnalyticsService {
   }
 
   private async buildReportData(dto: GenerateReportDto): Promise<Record<string, any>> {
+    const scope: DepartmentScope | null = dto.programId ? { all: false, departmentId: dto.programId } : null;
     const query: MetricsQueryDto = {
       periodId: dto.periodId,
+      programId: dto.programId,
       ...(dto.parameters?.from ? { from: dto.parameters.from } : {}),
       ...(dto.parameters?.to ? { to: dto.parameters.to } : {}),
     };
@@ -933,14 +1072,14 @@ export class AnalyticsService {
     switch (dto.reportType) {
       case 'period_summary': {
         const [platform, topSkills] = await Promise.all([
-          this.getPlatformMetrics(query),
-          this.getTopDemandedSkills(10),
+          this.getPlatformMetrics(query, scope),
+          this.getTopDemandedSkills(10, scope),
         ]);
         return { platformMetrics: platform, topSkills, generatedAt: new Date() };
       }
 
       case 'skill_gap_analysis': {
-        const skills = await this.getSkillTrends(query);
+        const skills = await this.getSkillTrends(query, scope);
         return {
           skills: skills.map((s) => ({
             name: s.skillName,
@@ -954,7 +1093,7 @@ export class AnalyticsService {
       }
 
       case 'matching_effectiveness': {
-        const platform = await this.getPlatformMetrics(query);
+        const platform = await this.getPlatformMetrics(query, scope);
         return {
           avgMatchScore: platform[0]?.avgMatchScore ?? null,
           avgTimeToFillDays: platform[0]?.avgTimeToFillDays ?? null,
@@ -964,12 +1103,12 @@ export class AnalyticsService {
       }
 
       case 'academic_process_summary': {
-        const [assignmentStats, academicStats] = await this.getAcademicKpis();
+        const [assignmentStats, academicStats] = await this.getAcademicKpis(scope);
         return { assignmentStats, academicStats, generatedAt: new Date() };
       }
 
       case 'supervisor_workload': {
-        const [assignmentStats] = await this.getAcademicKpis();
+        const [assignmentStats] = await this.getAcademicKpis(scope);
         return {
           totalAssignments: assignmentStats?.totalAssignments ?? 0,
           byRole: assignmentStats?.byRole ?? {},
@@ -980,7 +1119,7 @@ export class AnalyticsService {
       }
 
       case 'project_completion_rates': {
-        const [, academicStats] = await this.getAcademicKpis();
+        const [, academicStats] = await this.getAcademicKpis(scope);
         const total = academicStats?.totalRecords ?? 0;
         const completed = academicStats?.completedCount ?? 0;
         return {
@@ -1163,7 +1302,7 @@ export class AnalyticsService {
   }
 
   /** KPIs académicos consultados on-demand a admin-service y application-service (sin duplicar estado). */
-  async getAcademicKpis(): Promise<[
+  async getAcademicKpis(scope: DepartmentScope | null = null, requestedProgramId?: string): Promise<[
     {
       totalAssignments: number;
       byRole: Record<string, number>;
@@ -1179,12 +1318,13 @@ export class AnalyticsService {
       avgAnteproyectoCorrections: number | null;
     } | null,
   ]> {
+    const qs = this.toQueryString({ programId: this.effectiveProgram(scope, requestedProgramId) ?? undefined });
     const [assignmentStats, academicStats] = await Promise.all([
-      this.httpClient.get<any>('admin', '/internal/admin/assignments/stats').catch((err) => {
+      this.httpClient.get<any>('admin', `/internal/admin/assignments/stats${qs}`).catch((err) => {
         this.logger.warn(`No se pudieron obtener estadísticas de asignaciones: ${err.message}`);
         return null;
       }),
-      this.httpClient.get<any>('application', '/internal/applications/academic-records/stats').catch((err) => {
+      this.httpClient.get<any>('application', `/internal/applications/academic-records/stats${qs}`).catch((err) => {
         this.logger.warn(`No se pudieron obtener estadísticas de registros académicos: ${err.message}`);
         return null;
       }),

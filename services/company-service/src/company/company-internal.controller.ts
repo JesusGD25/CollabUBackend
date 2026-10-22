@@ -23,8 +23,12 @@ export class CompanyInternalController {
   @ApiQuery({ name: 'from', required: false, type: 'string' })
   @ApiQuery({ name: 'to', required: false, type: 'string' })
   @ApiResponse({ status: 200, description: 'Estadísticas obtenidas' })
-  async getAnalyticsStats(@Query('from') from?: string, @Query('to') to?: string) {
-    return this.companyService.getAnalyticsStats(from, to);
+  async getAnalyticsStats(
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('programId') programId?: string,
+  ) {
+    return this.companyService.getAnalyticsStats(from, to, programId);
   }
 
   @Get(':userId/basic-info')

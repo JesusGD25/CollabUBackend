@@ -33,6 +33,10 @@ export class Supervisor {
   @Column({ nullable: true, length: 200 })
   specialization: string;
 
+  /** Departamento (programa académico) al que pertenece el docente. */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
+
   @Column({ name: 'max_students', default: 10 })
   maxStudents: number;
 

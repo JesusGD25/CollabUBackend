@@ -5,10 +5,11 @@ import {
   ConflictException,
   BadRequestException,
   ForbiddenException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, FindOptionsWhere, In, MoreThanOrEqual, FindOperator } from 'typeorm';
-import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
+import { Repository, FindOptionsWhere, In, IsNull, MoreThanOrEqual, FindOperator } from 'typeorm';
+import { EventPublisher, MicroserviceHttpClient, DepartmentScope, resolveDepartmentScope } from '@collab-u/shared';
 
 import { Application, ApplicationStatus } from './entities/application.entity';
 import { ApplicationTimeline } from './entities/application-timeline.entity';
@@ -123,8 +124,58 @@ export interface PaginatedApplicationsResponse {
 }
 
 @Injectable()
-export class ApplicationService {
+export class ApplicationService implements OnModuleInit {
   private readonly logger = new Logger(ApplicationService.name);
+
+  /**
+   * Postulaciones anteriores a la división por departamentos no tienen `program_id`: se completa
+   * desde el perfil del estudiante (mejor esfuerzo, sin bloquear el arranque).
+   */
+  onModuleInit() {
+    // student-service puede arrancar después: se reintenta hasta que no queden pendientes resolubles.
+    [8000, 45000, 120000].forEach((delay) =>
+      setTimeout(() => {
+        this.backfillProgramIds().catch((err) =>
+          this.logger.warn(`Backfill de program_id omitido: ${err.message}`),
+        );
+      }, delay),
+    );
+  }
+
+  async backfillProgramIds(): Promise<number> {
+    const pending = await this.applicationRepo.find({
+      where: { programId: IsNull() },
+      select: ['id', 'studentId'],
+    });
+    if (pending.length === 0) return 0;
+    const byStudent = new Map<string, string | null>();
+    let updated = 0;
+    for (const app of pending) {
+      if (!byStudent.has(app.studentId)) {
+        try {
+          const data = await this.httpClient.get<{ programId?: string | null }>(
+            'student',
+            `/internal/students/${app.studentId}/matching-data`,
+          );
+          byStudent.set(app.studentId, data?.programId ?? null);
+        } catch {
+          byStudent.set(app.studentId, null);
+        }
+      }
+      const programId = byStudent.get(app.studentId);
+      if (programId) {
+        await this.applicationRepo.update(app.id, { programId });
+        updated++;
+      }
+    }
+    this.logger.log(`Backfill program_id: ${updated}/${pending.length} postulaciones`);
+    return updated;
+  }
+
+  /** Condición SQL de alcance sobre un alias de applications. null → sin filtro. */
+  private scopedProgramId(scope: DepartmentScope | null | undefined): string | null {
+    return scope && !scope.all ? scope.departmentId : null;
+  }
 
   constructor(
     @InjectRepository(Application)
@@ -171,10 +222,15 @@ export class ApplicationService {
    */
   async authorize(
     applicationId: string,
-    user: { id: string; role: string },
+    user: { id: string; role: string; adminLevel?: string | null; departmentId?: string | null },
     permission?: Permission,
   ): Promise<{ application: Application; viewer: ViewerContext }> {
     const application = await this.findApplicationById(applicationId);
+    // Admin de departamento: solo expedientes de estudiantes de su departamento (fuera → 404).
+    const scope = resolveDepartmentScope(user);
+    if (scope && !scope.all && application.programId !== scope.departmentId) {
+      throw new NotFoundException('Postulación no encontrada');
+    }
     const viewer = permission
       ? await this.projectAccess.assertPermission(application, user, permission)
       : await this.projectAccess.assertAccess(application, user);
@@ -223,6 +279,18 @@ export class ApplicationService {
     // Obtener datos del estudiante si se requiere validar semestre o carrera
     const requiresSemesterCheck = projectData.minimumSemester && projectData.minimumSemester > 0;
     const requiresProgramCheck = projectData.academicPrograms && projectData.academicPrograms.length > 0;
+
+    // Departamento del estudiante (snapshot): alimenta el alcance de los admins de departamento.
+    let studentProgramId: string | null = null;
+    try {
+      const sd = await this.httpClient.get<{ programId?: string | null }>(
+        'student',
+        `/internal/students/${studentId}/matching-data`,
+      );
+      studentProgramId = sd?.programId ?? null;
+    } catch (err) {
+      this.logger.warn(`No se pudo obtener programId del estudiante ${studentId}: ${err.message}`);
+    }
 
     if (requiresSemesterCheck || requiresProgramCheck) {
       let studentSemester: number | null = null;
@@ -323,6 +391,7 @@ export class ApplicationService {
       resumeUrl: dto.resumeUrl,
       portfolioUrl: dto.portfolioUrl,
       matchScore,
+      programId: studentProgramId,
     });
 
     const saved = await this.applicationRepo.save(application);
@@ -938,6 +1007,7 @@ export class ApplicationService {
     id: string;
     projectId: string;
     studentId: string;
+    programId: string | null;
     status: ApplicationStatus;
     matchScore: number | null;
     appliedAt: Date;
@@ -997,6 +1067,7 @@ export class ApplicationService {
       id: app.id,
       projectId: app.projectId,
       studentId: app.studentId,
+      programId: app.programId ?? null,
       status: app.status,
       matchScore: app.matchScore,
       appliedAt: app.appliedAt,
@@ -1028,12 +1099,15 @@ export class ApplicationService {
   // ──────────────────────────────────────────────────────────────────
 
   async getAdminPendingApplications(
-    query: { page?: number; limit?: number; search?: string },
+    query: { page?: number; limit?: number; search?: string; programId?: string },
+    scope: DepartmentScope | null = null,
   ): Promise<{ data: any[]; total: number; page: number; limit: number; totalPages: number }> {
     const { page = 1, limit = 10 } = query;
+    // Admin de departamento: fijo en el suyo. Superadmin: puede acotar por departamento.
+    const scopedId = this.scopedProgramId(scope) ?? (scope?.all ? query.programId || null : null);
 
     const [applications, total] = await this.applicationRepo.findAndCount({
-      where: { status: ApplicationStatus.ACCEPTED },
+      where: { status: ApplicationStatus.ACCEPTED, ...(scopedId ? { programId: scopedId } : {}) },
       order: { acceptedAt: 'ASC' },
       skip: (page - 1) * limit,
       take: limit,
@@ -1079,6 +1153,7 @@ export class ApplicationService {
         id: app.id,
         projectId: app.projectId,
         studentId: app.studentId,
+        programId: app.programId ?? null,
         status: app.status,
         matchScore: app.matchScore,
         appliedAt: app.appliedAt,
@@ -2927,15 +3002,22 @@ export class ApplicationService {
   // ESTADÍSTICAS (uso interno — analytics)
   // ──────────────────────────────────────────────────────────────────
 
-  async getAcademicRecordStats(): Promise<{
+  async getAcademicRecordStats(programId?: string): Promise<{
     totalRecords: number;
     byStatus: Record<string, number>;
     completedCount: number;
     avgDurationDays: number | null;
     avgAnteproyectoCorrections: number | null;
   }> {
-    const records = await this.academicRecordRepo.find();
-    const submissions = await this.submissionRepo.find({ where: { submissionType: SubmissionType.ANTEPROYECTO } });
+    let records = await this.academicRecordRepo.find();
+    let submissions = await this.submissionRepo.find({ where: { submissionType: SubmissionType.ANTEPROYECTO } });
+    if (programId) {
+      // Solo expedientes de estudiantes del departamento (program_id de la postulación).
+      const apps = await this.applicationRepo.find({ where: { programId }, select: ['id'] });
+      const ids = new Set(apps.map((a) => a.id));
+      records = records.filter((r) => ids.has(r.applicationId));
+      submissions = submissions.filter((sub) => ids.has((sub as { applicationId?: string }).applicationId ?? ''));
+    }
 
     const byStatus: Record<string, number> = {};
     const durationsDays: number[] = [];
@@ -2973,6 +3055,7 @@ export class ApplicationService {
   async getApplicationAnalyticsStats(filters: {
     projectId?: string;
     studentId?: string;
+    programId?: string;
     from?: string;
     to?: string;
   }): Promise<{
@@ -2982,11 +3065,12 @@ export class ApplicationService {
     acceptedCount: number;
     rejectedCount: number;
   }> {
-    const { projectId, studentId, from, to } = filters;
+    const { projectId, studentId, from, to, programId } = filters;
 
     const baseQuery = this.applicationRepo.createQueryBuilder('application');
     if (projectId) baseQuery.andWhere('application.project_id = :projectId', { projectId });
     if (studentId) baseQuery.andWhere('application.student_id = :studentId', { studentId });
+    if (programId) baseQuery.andWhere('application.program_id = :programId', { programId });
     if (from) baseQuery.andWhere('application.applied_at >= :from', { from });
     if (to) baseQuery.andWhere('application.applied_at <= :to', { to });
 
@@ -3063,11 +3147,13 @@ export class ApplicationService {
    * `accepted` / `pending_supervisor` para que el admin las vea en la misma cola
    * y navegue a asignar/reasignar asesor sin salir de "Proceso académico".
    */
-  private async getPreAssignmentRows(): Promise<{ rows: any[]; counts: Record<string, number> }> {
+  private async getPreAssignmentRows(scope: DepartmentScope | null = null): Promise<{ rows: any[]; counts: Record<string, number> }> {
+    const scopedId = this.scopedProgramId(scope);
+    const programFilter = scopedId ? { programId: scopedId } : {};
     const apps = await this.applicationRepo.find({
       where: [
-        { status: ApplicationStatus.ACCEPTED },
-        { status: ApplicationStatus.PENDING_SUPERVISOR },
+        { status: ApplicationStatus.ACCEPTED, ...programFilter },
+        { status: ApplicationStatus.PENDING_SUPERVISOR, ...programFilter },
       ],
       order: { acceptedAt: 'ASC' },
     });
@@ -3117,7 +3203,7 @@ export class ApplicationService {
     return { rows, counts };
   }
 
-  async getAcademicQueue(query: { status?: string; page?: number; limit?: number }): Promise<{
+  async getAcademicQueue(query: { status?: string; page?: number; limit?: number }, scope: DepartmentScope | null = null): Promise<{
     data: any[];
     total: number;
     page: number;
@@ -3128,17 +3214,24 @@ export class ApplicationService {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(50, Math.max(1, query.limit ?? 20));
     const offset = (page - 1) * limit;
+    const scopedId = this.scopedProgramId(scope);
+    // Conteos por estado (con el mismo alcance que la lista).
+    const countByStatus = () => {
+      const cq = this.academicRecordRepo
+        .createQueryBuilder('r')
+        .select('r.status', 'status')
+        .addSelect('COUNT(*)', 'count');
+      if (scopedId) {
+        cq.innerJoin(Application, 'sa', 'CAST(sa.id AS varchar) = r.applicationId').andWhere('sa.programId = :scopedId', { scopedId });
+      }
+      return cq.groupBy('r.status').getRawMany();
+    };
 
     const preAssignmentStatuses = [ApplicationStatus.ACCEPTED, ApplicationStatus.PENDING_SUPERVISOR];
     if (query.status && preAssignmentStatuses.includes(query.status as ApplicationStatus)) {
-      const { rows, counts } = await this.getPreAssignmentRows();
+      const { rows, counts } = await this.getPreAssignmentRows(scope);
       const filtered = rows.filter((r) => r.status === query.status);
-      const allCounts = await this.academicRecordRepo
-        .createQueryBuilder('r')
-        .select('r.status', 'status')
-        .addSelect('COUNT(*)', 'count')
-        .groupBy('r.status')
-        .getRawMany();
+      const allCounts = await countByStatus();
       const statusCounts: Record<string, number> = { ...counts };
       for (const row of allCounts) statusCounts[row.status] = parseInt(row.count, 10);
       const paged = filtered.slice(offset, offset + limit);
@@ -3165,6 +3258,10 @@ export class ApplicationService {
       qb.where('r.status IN (:...statuses)', { statuses: statusFilter });
     } else {
       qb.where('r.status NOT IN (:...excluded)', { excluded: excludedStatuses });
+    }
+
+    if (scopedId) {
+      qb.innerJoin(Application, 'sa', 'CAST(sa.id AS varchar) = r.applicationId').andWhere('sa.programId = :scopedId', { scopedId });
     }
 
     qb.orderBy('r.updatedAt', 'DESC');
@@ -3201,12 +3298,7 @@ export class ApplicationService {
       };
     });
 
-    const allCounts = await this.academicRecordRepo
-      .createQueryBuilder('r')
-      .select('r.status', 'status')
-      .addSelect('COUNT(*)', 'count')
-      .groupBy('r.status')
-      .getRawMany();
+    const allCounts = await countByStatus();
     const statusCounts: Record<string, number> = {};
     for (const row of allCounts) {
       statusCounts[row.status] = parseInt(row.count, 10);
@@ -3215,7 +3307,7 @@ export class ApplicationService {
     // Vista "Todos" (sin filtro): antepone las postulaciones pre-registro académico
     // (accepted / pending_supervisor) para que el admin las vea sin cambiar de pantalla.
     if (!statusFilter) {
-      const { rows: preRows, counts: preCounts } = await this.getPreAssignmentRows();
+      const { rows: preRows, counts: preCounts } = await this.getPreAssignmentRows(scope);
       Object.assign(statusCounts, preCounts);
       const merged = [...preRows, ...data].slice(0, limit);
       return {

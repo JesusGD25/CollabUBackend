@@ -386,7 +386,23 @@ docker exec collab-u-postgres psql -U collabu_admin -d auth_db -c "ALTER TABLE u
 
 # analytics-service — 1758980000000-AddEntityIdToReports (reportes por entidad puntual)
 docker exec collab-u-postgres psql -U collabu_admin -d analytics_db -c "ALTER TABLE reports ADD COLUMN IF NOT EXISTS entity_id uuid;"
+# Departamentos / subroles de admin (F0-F5) — todas las columnas de una vez, idempotente
+# (auth_db.users admin_level/department_id, company_db.companies program_ids/reviewed_by/reviewed_at,
+#  application_db.applications program_id, admin_db supervisors/supervisor_assignments/document_requirements program_id,
+#  analytics_db platform_metrics/skill_trends/reports program_id + skill_trends.category + índice único por (fecha, departamento)).
+# Los admins existentes pasan a admin_level='super'.
+cd ~/collabu/Backend
+docker exec -i collab-u-postgres psql -U collabu_admin -d postgres -v ON_ERROR_STOP=1 < scripts/schema-upgrade-departments.sql
 ```
 (La migración `InitialSchema` de analytics no hace falta en un despliegue que ya tiene las tablas: sirve solo para bases vacías.)
 
 Después, el flujo normal: `git pull` en ambos repos → rebuild (de a uno, dentro de `tmux`) → `up -d --force-recreate --no-build`. Tras varios rebuilds, liberar disco con `docker image prune -f && docker builder prune -f` (revisar `df -h`; con 30GB se llena rápido).
+
+## Verificación en modo producción local (antes de subir al servidor)
+
+Se probó el stack completo en Docker con `NODE_ENV=production` (22 de oct. 2026): `Backend/scripts/Build-Docker.ps1` (15 imágenes, ~2 min c/u), `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build` (18/18 `healthy` en <1 min, 0 reinicios, sin errores en logs), `Run-Seed-All.ps1 -SkipBase` (detecta storage dockerizado y copia los PDF al volumen), `verify-seed-coverage.mjs` (cobertura completa), `demo-check.mjs` (todo ✔) y Playwright 46/46 contra `http://localhost:4200`.
+
+Hallazgos a tener en cuenta en el servidor:
+- `evaluation-service` corre un cron **cada hora** que vence las evaluaciones `pending` con `due_date` pasado (en desarrollo no corre así). El fixup `4g` de `seed-departments-fixups.mjs` reabre las del cierre; si el seed se cargó días antes, vuelve a ejecutar `node scripts/seed-departments-fixups.mjs`.
+- El SSR del frontend calcula la URL del API a partir del host (`environment.ts`); dentro del contenedor `localhost:3000` no existe, así que el SSR de páginas autenticadas (p. ej. `/admin/users`) registra `ECONNREFUSED` en el log del frontend. Es ruido: el navegador repite la llamada y la pantalla carga bien.
+- Con dominio público: `.env` necesita `FRONTEND_ALLOWED_HOSTS`/`NG_ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `FRONTEND_URL` y `STORAGE_BASE_URL` con el host real.

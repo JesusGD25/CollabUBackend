@@ -65,6 +65,11 @@ export class CreateDocumentRequirementDto {
   @IsInt()
   displayOrder?: number;
 
+  @ApiPropertyOptional({ description: 'Departamento al que aplica; vacío = global (solo superadmin). Un admin de departamento siempre crea para el suyo.' })
+  @IsOptional()
+  @IsUUID()
+  programId?: string;
+
   @ApiPropertyOptional({ description: 'Archivo de plantilla/formato ya subido a Storage (opcional)' })
   @IsOptional()
   @IsUUID()

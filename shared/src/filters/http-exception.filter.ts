@@ -34,6 +34,7 @@ export class GlobalHttpExceptionFilter implements ExceptionFilter {
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
     let message = 'Error interno del servidor';
     let error = 'Internal Server Error';
+    let code: string | undefined;
 
     if (exception instanceof HttpException || this.isHttpExceptionLike(exception)) {
       statusCode = exception.getStatus();
@@ -45,6 +46,8 @@ export class GlobalHttpExceptionFilter implements ExceptionFilter {
         const resp = exceptionResponse as Record<string, any>;
         message = resp.message || message;
         error = resp.error || error;
+        // Código estable opcional (p. ej. SUPERVISOR_FULL) para que el cliente decida qué mostrar.
+        if (typeof resp.code === 'string') code = resp.code;
 
         // class-validator devuelve array de mensajes
         if (Array.isArray(resp.message)) {
@@ -60,6 +63,7 @@ export class GlobalHttpExceptionFilter implements ExceptionFilter {
       statusCode,
       message,
       error,
+      ...(code ? { code } : {}),
       timestamp: new Date().toISOString(),
       path: request.url,
     });

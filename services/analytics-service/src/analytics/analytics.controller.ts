@@ -22,10 +22,11 @@ import {
   Roles,
   CurrentUser,
   UserRole,
+  resolveDepartmentScope,
 } from '@collab-u/shared';
 
 import { AnalyticsService } from './analytics.service';
-import { MetricsQueryDto, GenerateReportDto } from './dto';
+import { MetricsQueryDto, GenerateReportDto, SkillTrendsQueryDto } from './dto';
 import { buildReportPdf } from './pdf/report-pdf.builder';
 
 @ApiTags('Analytics')
@@ -40,15 +41,15 @@ export class AnalyticsController {
   @Get('dashboard')
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'Dashboard institucional con métricas generales' })
-  getDashboard() {
-    return this.analyticsService.getDashboard();
+  getDashboard(@CurrentUser() user: any, @Query('programId') programId?: string) {
+    return this.analyticsService.getDashboard(resolveDepartmentScope(user), programId);
   }
 
   @Get('academic-kpis')
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'KPIs del flujo académico: carga docente, tiempos de aceptación, tasas de completitud' })
-  async getAcademicKpis() {
-    const [assignmentStats, academicStats] = await this.analyticsService.getAcademicKpis();
+  async getAcademicKpis(@CurrentUser() user: any, @Query('programId') programId?: string) {
+    const [assignmentStats, academicStats] = await this.analyticsService.getAcademicKpis(resolveDepartmentScope(user), programId);
     return { assignmentStats, academicStats };
   }
 
@@ -151,15 +152,15 @@ export class AnalyticsController {
   @Get('skills/trends')
   @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
   @ApiOperation({ summary: 'Tendencias de skills: demanda vs oferta' })
-  getSkillTrends(@Query() query: MetricsQueryDto) {
-    return this.analyticsService.getSkillTrends(query);
+  getSkillTrends(@CurrentUser() user: any, @Query() query: SkillTrendsQueryDto) {
+    return this.analyticsService.getSkillTrends(query, resolveDepartmentScope(user));
   }
 
   @Get('skills/top')
   @Roles(UserRole.ADMIN, UserRole.FACULTY, UserRole.STUDENT, UserRole.COMPANY)
   @ApiOperation({ summary: 'Top 10 skills más demandados actualmente' })
-  getTopDemandedSkills() {
-    return this.analyticsService.getTopDemandedSkills(10);
+  getTopDemandedSkills(@CurrentUser() user: any, @Query('programId') programId?: string) {
+    return this.analyticsService.getTopDemandedSkills(10, resolveDepartmentScope(user), programId);
   }
 
   // ─── Reports ─────────────────────────────────────────────────────────────────
@@ -168,21 +169,21 @@ export class AnalyticsController {
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'Generar un reporte analítico' })
   generateReport(@CurrentUser() user: any, @Body() dto: GenerateReportDto) {
-    return this.analyticsService.generateReport(user.id, dto);
+    return this.analyticsService.generateReport(user.id, dto, resolveDepartmentScope(user));
   }
 
   @Get('reports')
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'Listar reportes generados' })
-  getReports(@Query() query: MetricsQueryDto) {
-    return this.analyticsService.getReports(query);
+  getReports(@CurrentUser() user: any, @Query() query: MetricsQueryDto) {
+    return this.analyticsService.getReports(query, resolveDepartmentScope(user));
   }
 
   @Get('reports/:id/pdf')
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'Descargar un reporte generado como PDF' })
-  async downloadReportPdf(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
-    const report = await this.analyticsService.getReport(id);
+  async downloadReportPdf(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const report = await this.analyticsService.getReport(id, resolveDepartmentScope(user));
     const doc = buildReportPdf(report);
     const filename = `reporte-${report.reportType}-${report.id}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
@@ -194,7 +195,7 @@ export class AnalyticsController {
   @Get('reports/:id')
   @Roles(UserRole.ADMIN, UserRole.FACULTY)
   @ApiOperation({ summary: 'Obtener un reporte por ID' })
-  getReport(@Param('id', ParseUUIDPipe) id: string) {
-    return this.analyticsService.getReport(id);
+  getReport(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    return this.analyticsService.getReport(id, resolveDepartmentScope(user));
   }
 }

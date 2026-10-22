@@ -60,6 +60,11 @@ export class GenerateReportDto {
   @IsUUID()
   periodId?: string;
 
+  @ApiPropertyOptional({ description: 'Departamento al que se acota el reporte (vacío = Facultad completa). Un admin de departamento siempre usa el suyo.' })
+  @IsOptional()
+  @IsUUID()
+  programId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsObject()

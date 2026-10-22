@@ -77,4 +77,6 @@ export class Evaluation {
   projectTitle?: string | null;
   evaluatorName?: string | null;
   evaluatedName?: string | null;
+  /** true si no se pudieron resolver títulos/nombres (project-service o user-service no respondieron). */
+  enrichmentFailed?: boolean;
 }

@@ -1055,17 +1055,18 @@ ON CONFLICT (id) DO NOTHING;
 \c evaluation_db;
 SET client_encoding = 'UTF8';
 
+-- overall_score en escala 0-100 (la misma que valida SubmitEvaluationDto y que la UI divide entre 20).
 INSERT INTO "evaluations" (id, application_id, project_id, evaluator_id, evaluated_id, evaluation_type, status,
   overall_score, overall_comment, strengths, areas_for_improvement, completed_at) VALUES
 ('723fb2e0-fe7a-4556-b760-915728b9db96','59cbc405-1c87-4652-a111-9b1f59131def','fa6cd72e-83ce-4404-a8bc-a0e294c15f1e',
   '928b7648-201a-4ab8-8bbb-638a2e4f5490','978be3f3-1bef-4b92-aa20-eb62f64402e6','company_evaluates_student','completed',
-  4.8,'Excelente desempeño, entregó todos los hitos a tiempo y con alta calidad.','Autonomía, comunicación, calidad técnica.','Podría reforzar la documentación técnica.','2026-08-01 10:00:00-05'),
+  96,'Excelente desempeño, entregó todos los hitos a tiempo y con alta calidad.','Autonomía, comunicación, calidad técnica.','Podría reforzar la documentación técnica.','2026-08-01 10:00:00-05'),
 ('09fd03d9-d160-465f-807d-4a9d2ff11905','59cbc405-1c87-4652-a111-9b1f59131def','fa6cd72e-83ce-4404-a8bc-a0e294c15f1e',
   '978be3f3-1bef-4b92-aa20-eb62f64402e6','928b7648-201a-4ab8-8bbb-638a2e4f5490','student_evaluates_company','completed',
-  4.5,'Buen ambiente de trabajo y acompañamiento constante del equipo.','Acompañamiento, herramientas disponibles.','Podrían mejorar los tiempos de retroalimentación.','2026-08-02 10:00:00-05'),
+  90,'Buen ambiente de trabajo y acompañamiento constante del equipo.','Acompañamiento, herramientas disponibles.','Podrían mejorar los tiempos de retroalimentación.','2026-08-02 10:00:00-05'),
 ('e84b7571-17d4-4ebf-9305-28a0465e3bb0','59cbc405-1c87-4652-a111-9b1f59131def','fa6cd72e-83ce-4404-a8bc-a0e294c15f1e',
   '978be3f3-1bef-4b92-aa20-eb62f64402e6','47a3161d-169f-4224-9fb3-fcf74c9796d2','student_evaluates_supervisor','completed',
-  4.9,'La asesora estuvo disponible durante todo el proceso y sus observaciones fueron muy valiosas.','Disponibilidad, retroalimentación oportuna.',NULL,'2026-08-03 10:00:00-05')
+  98,'La asesora estuvo disponible durante todo el proceso y sus observaciones fueron muy valiosas.','Disponibilidad, retroalimentación oportuna.',NULL,'2026-08-03 10:00:00-05')
 ON CONFLICT (id) DO NOTHING;
 
 -- =========================================================================

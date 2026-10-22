@@ -3,11 +3,13 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
+  ServiceUnavailableException,
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient, DepartmentScope } from '@collab-u/shared';
 
 import { StudentProfile } from './entities/student-profile.entity';
 import { Skill, ProficiencyLevel } from './entities/skill.entity';
@@ -52,21 +54,43 @@ export class StudentService {
 
   // ── PERFIL ──
 
-  /** Resuelve el nombre de programa contra admin-service.academic_programs (best-effort, no bloqueante). */
-  private async resolveProgramId(programName: string): Promise<string | null> {
-    if (!programName?.trim()) return null;
+  /**
+   * Programa académico OBLIGATORIO: todo estudiante pertenece a uno de los programas activos del
+   * catálogo de la Facultad (admin-service). Acepta el id o, por compatibilidad, el nombre exacto.
+   * No existe el estudiante "sin programa": si no resuelve a un programa activo se rechaza la operación.
+   */
+  private async resolveRequiredProgram(
+    programId?: string | null,
+    programName?: string | null,
+  ): Promise<{ id: string; name: string }> {
+    let programs: { id: string; name: string; isActive?: boolean }[];
     try {
-      const programs = await this.httpClient.get<{ id: string; name: string }[]>(
+      programs = await this.httpClient.get<{ id: string; name: string; isActive?: boolean }[]>(
         'admin',
         '/internal/admin/programs',
       );
-      const norm = programName.toLowerCase().trim();
-      const match = programs.find((p) => p.name.toLowerCase().trim() === norm);
-      return match?.id ?? null;
     } catch (err) {
-      this.logger.warn(`No se pudo resolver programId contra el catálogo: ${err.message}`);
-      return null;
+      this.logger.warn(`No se pudo consultar el catálogo de programas: ${(err as Error).message}`);
+      throw new ServiceUnavailableException(
+        'No se pudo verificar el programa académico en este momento. Intenta de nuevo; no se guardó ningún cambio.',
+      );
     }
+
+    const active = (programs ?? []).filter((p) => p.isActive !== false);
+    const norm = (v: string) => v.toLowerCase().trim();
+    const match = programId
+      ? active.find((p) => p.id === programId)
+      : programName?.trim()
+        ? active.find((p) => norm(p.name) === norm(programName))
+        : undefined;
+
+    if (!match) {
+      const options = active.map((p) => p.name).join(', ');
+      throw new BadRequestException(
+        `Selecciona uno de los programas académicos de la Facultad${options ? `: ${options}` : ''}.`,
+      );
+    }
+    return { id: match.id, name: match.name };
   }
 
   async createProfile(dto: CreateStudentProfileDto): Promise<StudentProfile> {
@@ -75,12 +99,12 @@ export class StudentService {
       throw new ConflictException('Ya existe un perfil de estudiante para este usuario');
     }
 
-    const programId = dto.programId ?? (await this.resolveProgramId(dto.program));
+    const program = await this.resolveRequiredProgram(dto.programId, dto.program);
 
     const profile = this.profileRepo.create({
       userId: dto.userId,
-      program: dto.program,
-      programId,
+      program: program.name,
+      programId: program.id,
       faculty: dto.faculty || 'Facultad de Ingeniería',
       semester: dto.semester,
       studentCode: dto.studentCode,
@@ -140,11 +164,11 @@ export class StudentService {
 
   async updateProfile(userId: string, dto: UpdateStudentProfileDto): Promise<StudentProfile> {
     const profile = await this.getProfile(userId);
-    if (dto.program !== undefined && dto.programId === undefined) {
-      // El texto de programa cambió sin programId explícito: re-resuelve contra el catálogo.
-      // Si no matchea nada, se limpia el programId anterior en vez de dejar un ID obsoleto
-      // apuntando a un programa que ya no coincide con el texto.
-      profile.programId = await this.resolveProgramId(dto.program);
+    // El programa nunca puede quedar vacío ni fuera del catálogo: si el PATCH toca programa/programId
+    // se resuelve contra los programas activos y se guardan los dos campos coherentes entre sí.
+    let resolvedProgram: { id: string; name: string } | null = null;
+    if (dto.program !== undefined || dto.programId !== undefined) {
+      resolvedProgram = await this.resolveRequiredProgram(dto.programId, dto.program);
     }
     // NestJS/class-transformer con `target >= ES2022` (useDefineForClassFields) inicializa
     // TODOS los campos declarados del DTO como propiedad propia `undefined` aunque el cliente
@@ -155,6 +179,10 @@ export class StudentService {
       Object.entries(dto).filter(([, value]) => value !== undefined),
     );
     Object.assign(profile, definedFields);
+    if (resolvedProgram) {
+      profile.program = resolvedProgram.name;
+      profile.programId = resolvedProgram.id;
+    }
 
     const saved = await this.profileRepo.save(profile);
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
@@ -166,9 +194,19 @@ export class StudentService {
     return updatedProfile;
   }
 
-  async searchStudents(query: StudentSearchQueryDto): Promise<PaginatedStudentsResponseDto> {
+  async searchStudents(
+    query: StudentSearchQueryDto,
+    scope: DepartmentScope | null = null,
+  ): Promise<PaginatedStudentsResponseDto> {
     const qb = this.profileRepo.createQueryBuilder('student');
     qb.where('student.isVisible = :visible', { visible: true });
+
+    // Admin de departamento: solo estudiantes de su programa. Superadmin / otros roles: sin restricción.
+    if (scope && !scope.all) {
+      qb.andWhere('student.programId = :scopeProgramId', { scopeProgramId: scope.departmentId });
+    } else if (query.programId) {
+      qb.andWhere('student.programId = :programId', { programId: query.programId });
+    }
 
     if (query.search) {
       qb.andWhere(
@@ -559,11 +597,12 @@ export class StudentService {
    * `totalCreated` respeta el filtro de fechas (createdAt); `avgProfileCompleteness`
    * es un promedio "a día de hoy" sobre TODOS los perfiles actuales, sin filtrar por fecha.
    */
-  async getAnalyticsStats(from?: string, to?: string): Promise<{
+  async getAnalyticsStats(from?: string, to?: string, programId?: string): Promise<{
     totalCreated: number;
     avgProfileCompleteness: number | null;
   }> {
     const countQb = this.profileRepo.createQueryBuilder('student');
+    if (programId) countQb.andWhere('student.programId = :programId', { programId });
     if (from) {
       countQb.andWhere('student.createdAt >= :from', { from });
     }
@@ -572,10 +611,11 @@ export class StudentService {
     }
     const totalCreated = await countQb.getCount();
 
-    const avgRow = await this.profileRepo
+    const avgQb = this.profileRepo
       .createQueryBuilder('student')
-      .select('AVG(student.profileCompleteness)', 'avg')
-      .getRawOne<{ avg: string | null }>();
+      .select('AVG(student.profileCompleteness)', 'avg');
+    if (programId) avgQb.andWhere('student.programId = :programId', { programId });
+    const avgRow = await avgQb.getRawOne<{ avg: string | null }>();
     const avgProfileCompleteness = avgRow?.avg !== null && avgRow?.avg !== undefined
       ? Math.round(Number(avgRow.avg) * 100) / 100
       : null;
@@ -589,7 +629,7 @@ export class StudentService {
    * id del catálogo maestro cuando existe; si la skill es "libre" (catalogSkillId null) se
    * agrupa por nombre normalizado para evitar duplicados por mayúsculas/espacios.
    */
-  async getSkillsSupply(): Promise<
+  async getSkillsSupply(programId?: string): Promise<
     Record<
       string,
       { supplyCount: number; avgProficiencyLevel: number; category: string; name: string }
@@ -602,13 +642,15 @@ export class StudentService {
       [ProficiencyLevel.EXPERT]: 4,
     };
 
-    const rows = await this.skillRepo
+    const supplyQb = this.skillRepo
       .createQueryBuilder('skill')
       .select('skill.catalogSkillId', 'catalogSkillId')
       .addSelect('skill.name', 'name')
       .addSelect('skill.category', 'category')
-      .addSelect('skill.proficiencyLevel', 'proficiencyLevel')
-      .getRawMany<{
+      .addSelect('skill.proficiencyLevel', 'proficiencyLevel');
+    // Oferta del departamento: solo habilidades de los estudiantes de ese programa.
+    if (programId) supplyQb.innerJoin('skill.student', 'student').andWhere('student.programId = :programId', { programId });
+    const rows = await supplyQb.getRawMany<{
         catalogSkillId: string | null;
         name: string;
         category: string;

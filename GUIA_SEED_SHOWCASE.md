@@ -4,6 +4,8 @@ Cohorte **aditiva** sobre el seed base (`GUIA_SEED_DESARROLLO.md` en la raíz de
 
 **Contraseña de todas las cuentas:** `CollabU2026!`
 
+> **Actualización (F5, departamentos):** el generador ahora también lee `showcase/data-dept-*.mjs` y `showcase/extras.mjs` y suma 10 empresas, 20 estudiantes, 17 proyectos, 9 hilos académicos, 10 docentes, 3 admins de departamento, notificaciones y chat; el conteo de este documento corresponde a la cohorte original. La carga completa es `Run-Seed-All.ps1` (ver `GUIA_SEED_DEPARTAMENTOS.md`). El generador **excluye** el proyecto «App Móvil de Fidelización» al completar skills faltantes: debe seguir sin ellas (fixture del e2e protegido de matching).
+
 ## Cómo ejecutarlo
 
 Requisitos: el seed base ya cargado (`Run-Seed.ps1`) y los servicios corriendo (el generador lee de la BD los catálogos reales —skills, programas, asesores y periodos— que `admin-service` crea en runtime con UUIDs aleatorios).

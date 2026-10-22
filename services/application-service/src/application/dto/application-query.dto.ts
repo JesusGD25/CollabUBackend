@@ -9,6 +9,11 @@ export class ApplicationQueryDto {
   @IsEnum(ApplicationStatus)
   status?: ApplicationStatus;
 
+  @ApiPropertyOptional({ description: 'Departamento del estudiante (solo lo respeta para el superadmin)' })
+  @IsOptional()
+  @IsString()
+  programId?: string;
+
   @ApiPropertyOptional({ description: 'Buscar por projectId' })
   @IsOptional()
   @IsString()

@@ -1,6 +1,7 @@
 import {
   Injectable,
   ConflictException,
+  ServiceUnavailableException,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
@@ -11,7 +12,7 @@ import { Repository, MoreThan } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, AdminLevel } from '@collab-u/shared';
 
 import { User, UserRole } from './entities/user.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -25,6 +26,7 @@ import { ResendVerificationEmailDto } from './dto/resend-verification-email.dto'
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { CreateAdminUserDto, UpdateAdminUserDto } from './dto/admin-user.dto';
 
 const SALT_ROUNDS = 12;
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -125,7 +127,7 @@ export class AuthService {
   async login(dto: LoginDto): Promise<{
     accessToken: string;
     refreshToken: string;
-    user: { id: string; email: string; role: UserRole; isVerified: boolean; isActive: boolean };
+    user: { id: string; email: string; role: UserRole; isVerified: boolean; isActive: boolean; adminLevel: string | null; departmentId: string | null };
     expiresIn: number;
   }> {
     // 1. Buscar usuario
@@ -195,6 +197,7 @@ export class AuthService {
         role: user.role,
         isVerified: user.isVerified,
         isActive: user.isActive,
+        ...this.adminScopeOf(user),
       },
       expiresIn: 3600, // 1 hora en segundos
     };
@@ -507,6 +510,8 @@ export class AuthService {
     id: string;
     email: string;
     role: string;
+    adminLevel: string | null;
+    departmentId: string | null;
   }> {
     try {
       const payload = this.jwtService.verify(token);
@@ -523,6 +528,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         role: user.role,
+        ...this.adminScopeOf(user),
       };
     } catch {
       throw new UnauthorizedException('Token inválido o expirado');
@@ -569,30 +575,102 @@ export class AuthService {
     return { role: user.role };
   }
 
+  // ─── ALCANCE DE ADMINISTRADOR (Facultad vs departamento) ─────────────
+  /**
+   * Nivel y departamento efectivos de un usuario. Solo los `admin` tienen alcance; un admin sin nivel
+   * explícito (cuentas anteriores a la división) es superadmin. Para el resto de roles: null/null.
+   */
+  private adminScopeOf(user: Pick<User, 'role' | 'adminLevel' | 'departmentId'>): {
+    adminLevel: string | null;
+    departmentId: string | null;
+  } {
+    if (user.role !== UserRole.ADMIN) return { adminLevel: null, departmentId: null };
+    const level = user.adminLevel ?? AdminLevel.SUPER;
+    return {
+      adminLevel: level,
+      departmentId: level === AdminLevel.DEPARTMENT ? user.departmentId : null,
+    };
+  }
+
+  /** Valida (rol, nivel, departamento) y devuelve lo que se debe guardar. */
+  private async normalizeAdminScope(
+    role: UserRole,
+    adminLevel: string | null | undefined,
+    departmentId: string | null | undefined,
+  ): Promise<{ adminLevel: string | null; departmentId: string | null }> {
+    if (role !== UserRole.ADMIN) return { adminLevel: null, departmentId: null };
+
+    if (!adminLevel) {
+      throw new BadRequestException('Indica el nivel del administrador: "super" (Facultad) o "department" (departamento).');
+    }
+    if (adminLevel === AdminLevel.SUPER) {
+      return { adminLevel: AdminLevel.SUPER, departmentId: null };
+    }
+    if (adminLevel !== AdminLevel.DEPARTMENT) {
+      throw new BadRequestException('El nivel debe ser "super" o "department".');
+    }
+    if (!departmentId) {
+      throw new BadRequestException('Un administrador de departamento necesita un departamento asignado.');
+    }
+    await this.assertDepartmentExists(departmentId);
+    return { adminLevel: AdminLevel.DEPARTMENT, departmentId };
+  }
+
+  /** El departamento debe existir y estar activo (se consulta a admin-service: dueño del catálogo de programas). */
+  private async assertDepartmentExists(departmentId: string): Promise<void> {
+    const base = process.env.ADMIN_SERVICE_URL || 'http://localhost:3011';
+    let programs: Array<{ id: string; isActive?: boolean }>;
+    try {
+      const res = await fetch(`${base}/internal/admin/programs`, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) throw new Error(`admin-service respondió ${res.status}`);
+      programs = (await res.json()) as Array<{ id: string; isActive?: boolean }>;
+    } catch (err) {
+      this.logger.warn(`No se pudo verificar el departamento ${departmentId}: ${(err as Error).message}`);
+      throw new ServiceUnavailableException(
+        'No se pudo verificar el departamento en este momento. Intenta de nuevo; no se guardó ningún cambio.',
+      );
+    }
+    const found = programs.find((p) => p.id === departmentId);
+    if (!found || found.isActive === false) {
+      throw new BadRequestException('El departamento indicado no existe o está inactivo.');
+    }
+  }
+
+  /** Evita dejar la plataforma sin ningún superadmin activo. */
+  private async assertNotLastSuperAdmin(user: User): Promise<void> {
+    const isSuper =
+      user.role === UserRole.ADMIN && (user.adminLevel ?? AdminLevel.SUPER) === AdminLevel.SUPER && user.isActive;
+    if (!isSuper) return;
+    const supers = await this.userRepo
+      .createQueryBuilder('u')
+      .where('u.role = :role AND u.is_active = true', { role: UserRole.ADMIN })
+      .andWhere("(u.admin_level IS NULL OR u.admin_level = 'super')")
+      .getCount();
+    if (supers <= 1) {
+      throw new ConflictException('No se puede dejar la plataforma sin un administrador de Facultad activo.');
+    }
+  }
+
   // ─── CREATE USER (admin) ──────────────────────────────────────────
-  async createAdminUser(data: {
-    email: string;
-    password: string;
-    role: string;
-  }): Promise<Partial<User>> {
+  async createAdminUser(data: CreateAdminUserDto): Promise<Partial<User>> {
     const existing = await this.userRepo.findOne({ where: { email: data.email } });
     if (existing) throw new ConflictException('El email ya está registrado');
 
-    if (!Object.values(UserRole).includes(data.role as UserRole)) {
-      throw new BadRequestException('Rol inválido');
-    }
+    const scope = await this.normalizeAdminScope(data.role, data.adminLevel, data.departmentId);
 
     const passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
     const user = this.userRepo.create({
       email: data.email,
       passwordHash,
-      role: data.role as UserRole,
-      isVerified: true,   // creado por admin, no requiere verificación por email
+      role: data.role,
+      isVerified: true, // creado por admin, no requiere verificación por email
       isActive: true,
       termsAccepted: true,
       termsAcceptedAt: new Date(),
       termsVersion: 'v1.0',
       dataTreatmentAccepted: true,
+      adminLevel: scope.adminLevel,
+      departmentId: scope.departmentId,
     });
     const saved = await this.userRepo.save(user);
     this.logger.log(`Usuario ${saved.id} (${saved.email}) creado por admin`);
@@ -605,22 +683,42 @@ export class AuthService {
       isVerified: saved.isVerified,
       lastLogin: saved.lastLogin,
       createdAt: saved.createdAt,
+      ...this.adminScopeOf(saved),
     };
   }
 
   // ─── UPDATE USER (admin) ──────────────────────────────────────────
-  async updateAdminUser(
-    id: string,
-    data: { isActive?: boolean; role?: string; email?: string; password?: string },
-  ): Promise<Partial<User>> {
+  async updateAdminUser(id: string, data: UpdateAdminUserDto, actorId?: string): Promise<Partial<User>> {
     const user = await this.userRepo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
     const updateData: Partial<User> = {};
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
-    if (data.role && Object.values(UserRole).includes(data.role as UserRole)) {
-      updateData.role = data.role as UserRole;
+    if (data.role) updateData.role = data.role;
+
+    const nextRole = (updateData.role ?? user.role) as UserRole;
+    const touchesScope = data.role !== undefined || data.adminLevel !== undefined || data.departmentId !== undefined;
+    if (touchesScope) {
+      // Si solo cambian una parte, se conserva el resto del alcance actual.
+      const level = data.adminLevel ?? (user.role === UserRole.ADMIN ? (user.adminLevel ?? AdminLevel.SUPER) : undefined);
+      const dept = data.adminLevel === AdminLevel.SUPER ? null : (data.departmentId ?? user.departmentId);
+      const scope = await this.normalizeAdminScope(nextRole, level, dept);
+      updateData.adminLevel = scope.adminLevel;
+      updateData.departmentId = scope.departmentId;
     }
+
+    // Protecciones: no auto-bloquearse ni dejar la plataforma sin administrador de Facultad.
+    const losesSuper =
+      updateData.isActive === false ||
+      (updateData.adminLevel !== undefined && updateData.adminLevel !== AdminLevel.SUPER) ||
+      (updateData.role !== undefined && updateData.role !== UserRole.ADMIN);
+    if (losesSuper) {
+      if (actorId && actorId === id) {
+        throw new ConflictException('No puedes quitarte tu propio acceso de administrador de Facultad.');
+      }
+      await this.assertNotLastSuperAdmin(user);
+    }
+
     if (data.email && data.email !== user.email) {
       const taken = await this.userRepo.findOne({ where: { email: data.email } });
       if (taken) throw new ConflictException('El email ya está en uso');
@@ -632,23 +730,41 @@ export class AuthService {
       updateData.passwordHash = await bcrypt.hash(data.password, SALT_ROUNDS);
       await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
     }
+    if (touchesScope) {
+      // Cambió el alcance: se revocan las sesiones para forzar un nuevo login con el alcance correcto.
+      await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
+    }
 
     await this.userRepo.update(id, updateData);
 
     const updated = await this.userRepo
       .createQueryBuilder('user')
-      .select(['user.id', 'user.email', 'user.role', 'user.isActive', 'user.isVerified', 'user.lastLogin', 'user.createdAt'])
+      .select([
+        'user.id',
+        'user.email',
+        'user.role',
+        'user.isActive',
+        'user.isVerified',
+        'user.lastLogin',
+        'user.createdAt',
+        'user.adminLevel',
+        'user.departmentId',
+      ])
       .where('user.id = :id', { id })
       .getOne();
 
     this.logger.log(`Usuario ${id} actualizado por admin`);
-    return updated!;
+    return { ...updated!, ...this.adminScopeOf(updated!) };
   }
 
   // ─── DELETE USER (admin) ──────────────────────────────────────────
-  async deleteAdminUser(id: string): Promise<void> {
+  async deleteAdminUser(id: string, actorId?: string): Promise<void> {
     const user = await this.userRepo.findOne({ where: { id } });
     if (!user) throw new NotFoundException('Usuario no encontrado');
+    if (actorId && actorId === id) {
+      throw new ConflictException('No puedes eliminar tu propia cuenta de administrador.');
+    }
+    await this.assertNotLastSuperAdmin(user);
 
     // Revocar tokens antes de eliminar (cascade debería hacerlo, pero por seguridad)
     await this.refreshTokenRepo.update({ userId: id, revoked: false }, { revoked: true, revokedAt: new Date() });
@@ -681,6 +797,8 @@ export class AuthService {
         'user.isVerified',
         'user.lastLogin',
         'user.createdAt',
+        'user.adminLevel',
+        'user.departmentId',
       ])
       .orderBy('user.createdAt', 'DESC');
 

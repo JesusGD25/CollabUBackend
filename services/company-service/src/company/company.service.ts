@@ -3,10 +3,12 @@ import {
   Logger,
   NotFoundException,
   ConflictException,
+  BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { EventPublisher } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient, DepartmentScope } from '@collab-u/shared';
 
 import { CompanyProfile, VerificationStatus } from './entities/company-profile.entity';
 import { CompanyLocation } from './entities/company-location.entity';
@@ -42,18 +44,52 @@ export class CompanyService {
     @InjectRepository(CompanyContact) private contactRepo: Repository<CompanyContact>,
     @InjectRepository(BusinessArea) private areaRepo: Repository<BusinessArea>,
     private readonly eventPublisher: EventPublisher,
+    private readonly httpClient: MicroserviceHttpClient,
   ) {}
+
+  /**
+   * Valida que cada id sea un programa ACTIVO del catálogo de la Facultad (admin-service).
+   * Si el catálogo no responde se rechaza: no se guarda una empresa con departamentos sin verificar.
+   */
+  private async assertValidPrograms(programIds: string[]): Promise<string[]> {
+    const unique = [...new Set(programIds ?? [])];
+    if (unique.length === 0) {
+      throw new BadRequestException('Selecciona al menos un departamento de trabajo.');
+    }
+    let programs: { id: string; isActive?: boolean }[];
+    try {
+      programs = await this.httpClient.get<{ id: string; isActive?: boolean }[]>('admin', '/internal/admin/programs');
+    } catch (err) {
+      this.logger.warn(`No se pudo consultar el catálogo de programas: ${(err as Error).message}`);
+      throw new ServiceUnavailableException(
+        'No se pudo verificar los departamentos en este momento. Intenta de nuevo; no se guardó ningún cambio.',
+      );
+    }
+    const active = new Set((programs ?? []).filter((p) => p.isActive !== false).map((p) => p.id));
+    if (unique.some((id) => !active.has(id))) {
+      throw new BadRequestException('Alguno de los departamentos seleccionados no existe o está inactivo.');
+    }
+    return unique;
+  }
 
   // ── PERFIL ──
 
-  async createProfile(dto: CreateCompanyProfileDto): Promise<CompanyProfile> {
+  /**
+   * `base = true` solo lo usa el evento auth.user.verified: crea el perfil placeholder SIN departamentos.
+   * Mientras `programIds` esté vacío el onboarding no está completo y solo el superadmin ve la empresa;
+   * el formulario de perfil exige elegir al menos un departamento.
+   */
+  async createProfile(dto: CreateCompanyProfileDto, base = false): Promise<CompanyProfile> {
     const existing = await this.profileRepo.findOne({ where: { userId: dto.userId } });
     if (existing) {
       throw new ConflictException('Ya existe un perfil de empresa para este usuario');
     }
 
+    const programIds = base && !dto.programIds?.length ? [] : await this.assertValidPrograms(dto.programIds);
+
     const profile = this.profileRepo.create({
       userId: dto.userId,
+      programIds,
       companyName: dto.companyName,
       legalName: dto.legalName,
       nit: dto.nit,
@@ -109,7 +145,11 @@ export class CompanyService {
 
   async updateProfile(userId: string, dto: UpdateCompanyProfileDto): Promise<CompanyProfile> {
     const profile = await this.getProfile(userId);
-    Object.assign(profile, dto);
+    const { programIds, ...rest } = dto;
+    Object.assign(profile, rest);
+    if (programIds !== undefined) {
+      profile.programIds = await this.assertValidPrograms(programIds);
+    }
 
     const saved = await this.profileRepo.save(profile);
     saved.profileCompleteness = this.calculateProfileCompleteness(saved);
@@ -306,6 +346,7 @@ export class CompanyService {
       totalReviews: profile.totalReviews,
       totalProjects: profile.totalProjects,
       headquartersCity: profile.headquartersCity,
+      programIds: profile.programIds ?? [],
       locations: (profile.locations || []).map((l) => ({
         city: l.city,
         state: l.state,
@@ -345,11 +386,12 @@ export class CompanyService {
     await this.profileRepo.save(profile);
   }
 
-  async getAnalyticsStats(from?: string, to?: string): Promise<{
+  async getAnalyticsStats(from?: string, to?: string, programId?: string): Promise<{
     totalCreated: number;
     totalActive: number;
   }> {
     const createdQuery = this.profileRepo.createQueryBuilder('company');
+    if (programId) createdQuery.andWhere('company.programIds @> ARRAY[:programId]::uuid[]', { programId });
     if (from) {
       createdQuery.andWhere('company.created_at >= :from', { from });
     }
@@ -358,12 +400,12 @@ export class CompanyService {
     }
     const totalCreated = await createdQuery.getCount();
 
-    const totalActive = await this.profileRepo.count({
-      where: {
-        isActive: true,
-        verificationStatus: VerificationStatus.VERIFIED,
-      },
-    });
+    const activeQb = this.profileRepo
+      .createQueryBuilder('company')
+      .where('company.isActive = true')
+      .andWhere('company.verificationStatus = :verified', { verified: VerificationStatus.VERIFIED });
+    if (programId) activeQb.andWhere('company.programIds @> ARRAY[:programId]::uuid[]', { programId });
+    const totalActive = await activeQb.getCount();
 
     return { totalCreated, totalActive };
   }
@@ -403,8 +445,10 @@ export class CompanyService {
     const hasHeadquarters = !!profile.headquartersCity?.trim();
     const hasContact = (profile.contacts?.length ?? 0) > 0;
     const hasBusinessArea = (profile.businessAreas?.length ?? 0) > 0;
+    const hasPrograms = (profile.programIds?.length ?? 0) > 0;
 
     return (
+      hasPrograms &&
       hasCompanyName &&
       hasNit &&
       hasIndustry &&
@@ -447,9 +491,19 @@ export class CompanyService {
     limit?: number;
     search?: string;
     status?: string;
-  }) {
+    programId?: string;
+  }, scope: DepartmentScope | null = null) {
     const page  = Math.max(1, Number(query.page)  || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+
+    if (query.status && !Object.values(VerificationStatus).includes(query.status as VerificationStatus)) {
+      throw new BadRequestException(
+        `Estado inválido. Valores permitidos: ${Object.values(VerificationStatus).join(', ')}.`,
+      );
+    }
+    if (query.programId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query.programId)) {
+      throw new BadRequestException('programId debe ser un UUID válido.');
+    }
 
     const qb = this.profileRepo
       .createQueryBuilder('c')
@@ -460,6 +514,12 @@ export class CompanyService {
     if (query.search) {
       qb.andWhere('(c.companyName ILIKE :s OR c.nit ILIKE :s OR c.industry ILIKE :s)',
         { s: `%${query.search}%` });
+    }
+    // Admin de departamento: solo empresas asociadas a su departamento (las sin departamento son de la Facultad).
+    if (scope && !scope.all) {
+      qb.andWhere('c.programIds @> ARRAY[:scopeProgramId]::uuid[]', { scopeProgramId: scope.departmentId });
+    } else if (query.programId) {
+      qb.andWhere('c.programIds @> ARRAY[:programId]::uuid[]', { programId: query.programId });
     }
     if (query.status) {
       qb.andWhere('c.verificationStatus = :status', { status: query.status });
@@ -476,9 +536,16 @@ export class CompanyService {
     companyId: string,
     action: 'approve' | 'reject' | 'suspend',
     reason?: string,
+    reviewer?: { id?: string; scope?: DepartmentScope | null },
   ) {
     const company = await this.profileRepo.findOne({ where: { id: companyId } });
     if (!company) throw new NotFoundException('Empresa no encontrada');
+
+    // Fuera del alcance del admin de departamento → se oculta como inexistente.
+    const scope = reviewer?.scope;
+    if (scope && !scope.all && !(company.programIds ?? []).includes(scope.departmentId)) {
+      throw new NotFoundException('Empresa no encontrada');
+    }
 
     const statusMap: Record<string, VerificationStatus> = {
       approve:  VerificationStatus.VERIFIED,
@@ -486,6 +553,8 @@ export class CompanyService {
       suspend:  VerificationStatus.SUSPENDED,
     };
     company.verificationStatus = statusMap[action];
+    company.reviewedBy = reviewer?.id ?? null;
+    company.reviewedAt = new Date();
     await this.profileRepo.save(company);
 
     await this.eventPublisher.publish('company.verification.updated', {

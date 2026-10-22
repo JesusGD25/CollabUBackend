@@ -62,6 +62,17 @@ export class User {
   @Column({ name: 'last_login', type: 'timestamptz', nullable: true })
   lastLogin: Date | null;
 
+  /**
+   * Solo aplica a `role = admin`: 'super' (Facultad, ve todo) o 'department' (un solo departamento).
+   * NULL en un admin se interpreta como 'super' (cuentas anteriores a esta división).
+   */
+  @Column({ name: 'admin_level', type: 'varchar', length: 20, nullable: true })
+  adminLevel: string | null;
+
+  /** UUID lógico de `admin_db.academic_programs.id` (el departamento). Solo admin de departamento. */
+  @Column({ name: 'department_id', type: 'uuid', nullable: true })
+  departmentId: string | null;
+
   @Column({ name: 'password_changed_at', type: 'timestamptz', nullable: true })
   passwordChangedAt: Date | null;
 

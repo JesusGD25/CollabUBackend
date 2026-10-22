@@ -1,2 +1,2 @@
-export { MetricsQueryDto } from './metrics-query.dto';
+export { MetricsQueryDto, SkillTrendsQueryDto } from './metrics-query.dto';
 export { GenerateReportDto } from './generate-report.dto';

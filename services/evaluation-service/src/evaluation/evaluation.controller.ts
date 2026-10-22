@@ -20,7 +20,7 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole, assertSuperAdmin } from '@collab-u/shared';
 
 import { EvaluationService } from './evaluation.service';
 import {
@@ -81,7 +81,8 @@ export class EvaluationController {
   @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear un criterio de evaluación (admin)' })
-  createCriterion(@Body() dto: CreateCriterionDto) {
+  createCriterion(@CurrentUser() user: any, @Body() dto: CreateCriterionDto) {
+    assertSuperAdmin(user);
     return this.evaluationService.createCriterion(dto);
   }
 
@@ -105,16 +106,19 @@ export class EvaluationController {
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver evaluaciones de una postulación' })
   @ApiParam({ name: 'applicationId', type: 'string' })
-  getByApplication(@Param('applicationId', ParseUUIDPipe) applicationId: string) {
-    return this.evaluationService.findByApplication(applicationId);
+  getByApplication(
+    @Param('applicationId', ParseUUIDPipe) applicationId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.evaluationService.findByApplication(applicationId, { id: user.id, role: user.role });
   }
 
   @Get(':id')
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver detalle de una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.evaluationService.findById(id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.evaluationService.findById(id, { id: user.id, role: user.role });
   }
 
   @Post(':id/submit')
@@ -142,6 +146,7 @@ export class EvaluationController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear plantilla de evaluación (admin)' })
   createTemplate(@Body() dto: CreateTemplateDto, @CurrentUser() user: any) {
+    assertSuperAdmin(user);
     return this.evaluationService.createTemplate(dto, user.id);
   }
 
@@ -150,9 +155,11 @@ export class EvaluationController {
   @ApiOperation({ summary: 'Actualizar plantilla (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
   updateTemplate(
+    @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTemplateDto,
   ) {
+    assertSuperAdmin(user);
     return this.evaluationService.updateTemplate(id, dto);
   }
 
@@ -161,7 +168,8 @@ export class EvaluationController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar plantilla (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
-  deleteTemplate(@Param('id', ParseUUIDPipe) id: string) {
+  deleteTemplate(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    assertSuperAdmin(user);
     return this.evaluationService.deleteTemplate(id);
   }
 
@@ -174,9 +182,11 @@ export class EvaluationController {
   @ApiOperation({ summary: 'Actualizar criterio (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
   updateCriterion(
+    @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCriterionDto,
   ) {
+    assertSuperAdmin(user);
     return this.evaluationService.updateCriterion(id, dto);
   }
 
@@ -185,7 +195,8 @@ export class EvaluationController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar criterio (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
-  deleteCriterion(@Param('id', ParseUUIDPipe) id: string) {
+  deleteCriterion(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    assertSuperAdmin(user);
     return this.evaluationService.deleteCriterion(id);
   }
 }

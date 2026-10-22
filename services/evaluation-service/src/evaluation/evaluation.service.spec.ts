@@ -109,6 +109,8 @@ describe('EvaluationService', () => {
     // findByApplication()/findById() ahora hacen batch-fetch de ratings —
     // por defecto sin ratings; los tests que los necesiten sobreescriben esto.
     mockRatingRepo.find.mockResolvedValue([]);
+    // attachCriteria() consulta el catálogo de criterios — por defecto vacío.
+    mockCriteriaRepo.find.mockResolvedValue([]);
   });
 
   afterEach(() => jest.clearAllMocks());
@@ -226,6 +228,63 @@ describe('EvaluationService', () => {
       expect(existingRating.score).toBe(80);
     });
 
+    describe('rating del perfil evaluado (0-100 → 0-5)', () => {
+      const prepare = (type: EvaluationType) => {
+        const completed = makeMockEvaluation({
+          evaluationType: type,
+          status: EvaluationStatus.COMPLETED,
+          overallScore: 80,
+          completedAt: new Date(),
+        });
+        mockEvaluationRepo.findOne.mockResolvedValue(makeMockEvaluation({ evaluationType: type }));
+        mockRatingRepo.findOne.mockResolvedValue(null);
+        mockRatingRepo.create.mockReturnValue({});
+        mockRatingRepo.save.mockResolvedValue({});
+        mockRatingRepo.find.mockResolvedValue([{ score: 80 }]);
+        mockEvaluationRepo.save.mockResolvedValue(completed);
+        // getAggregateScores: 2 evaluaciones completadas, 80 y 90 → promedio 85
+        mockEvaluationRepo.find.mockResolvedValue([
+          makeMockEvaluation({ status: EvaluationStatus.COMPLETED, overallScore: 80, evaluationType: type }),
+          makeMockEvaluation({ id: 'e2', status: EvaluationStatus.COMPLETED, overallScore: 90, evaluationType: type }),
+        ]);
+      };
+
+      it('empresa→estudiante actualiza el perfil del estudiante con 85/20 = 4.25', async () => {
+        prepare(EvaluationType.COMPANY_EVALUATES_STUDENT);
+
+        await service.submitEvaluation(EVAL_ID, EVALUATOR_ID, dto);
+
+        expect(mockHttpClient.post).toHaveBeenCalledWith('student', '/internal/students/update-rating', {
+          studentUserId: EVALUATED_ID,
+          averageRating: 4.25,
+          totalRatings: 2,
+        });
+      });
+
+      it('estudiante→empresa actualiza el rating de la empresa', async () => {
+        prepare(EvaluationType.STUDENT_EVALUATES_COMPANY);
+
+        await service.submitEvaluation(EVAL_ID, EVALUATOR_ID, dto);
+
+        expect(mockHttpClient.post).toHaveBeenCalledWith('company', '/internal/companies/update-rating', {
+          companyUserId: EVALUATED_ID,
+          rating: 4.25,
+          totalReviews: 2,
+        });
+      });
+
+      it('si el otro servicio falla, la evaluación igual se completa', async () => {
+        prepare(EvaluationType.COMPANY_EVALUATES_STUDENT);
+        mockHttpClient.post.mockImplementation((_svc: string, path: string) =>
+          path.includes('update-rating') ? Promise.reject(new Error('down')) : Promise.resolve([]),
+        );
+
+        const result = await service.submitEvaluation(EVAL_ID, EVALUATOR_ID, dto);
+
+        expect(result.status).toBe(EvaluationStatus.COMPLETED);
+      });
+    });
+
     it('debería lanzar NotFoundException si la evaluación no existe', async () => {
       mockEvaluationRepo.findOne.mockResolvedValue(null);
 
@@ -282,6 +341,107 @@ describe('EvaluationService', () => {
 
       await expect(service.findById(EVAL_ID)).rejects.toThrow(NotFoundException);
     });
+
+    it('adjunta el criterio (nombre, categoría, peso) a cada calificación', async () => {
+      mockEvaluationRepo.findOne.mockResolvedValue(makeMockEvaluation({ status: EvaluationStatus.COMPLETED }));
+      mockRatingRepo.find.mockResolvedValue([
+        { id: 'r1', evaluationId: EVAL_ID, criterionId: CRITERION_ID, score: 80, comment: null },
+      ]);
+      mockCriteriaRepo.find.mockResolvedValue([
+        {
+          id: CRITERION_ID,
+          name: 'Calidad técnica del trabajo entregado',
+          description: 'd',
+          category: CriterionCategory.TECHNICAL,
+          weight: '0.5',
+          ratingScale: RatingScale.ONE_TO_FIVE,
+        },
+      ]);
+
+      const result = await service.findById(EVAL_ID);
+
+      expect(result.ratings![0].criterion).toEqual(
+        expect.objectContaining({ id: CRITERION_ID, name: 'Calidad técnica del trabajo entregado', weight: 0.5 }),
+      );
+    });
+
+    it('deja criterion = null si el criterio ya no existe (no rompe la respuesta)', async () => {
+      mockEvaluationRepo.findOne.mockResolvedValue(makeMockEvaluation());
+      mockRatingRepo.find.mockResolvedValue([
+        { id: 'r1', evaluationId: EVAL_ID, criterionId: CRITERION_ID, score: 80, comment: null },
+      ]);
+      mockCriteriaRepo.find.mockResolvedValue([]);
+
+      const result = await service.findById(EVAL_ID);
+      expect(result.ratings![0].criterion).toBeNull();
+    });
+
+    it('marca enrichmentFailed cuando project/user-service no responden', async () => {
+      mockEvaluationRepo.findOne.mockResolvedValue(makeMockEvaluation());
+      mockHttpClient.post.mockRejectedValue(new Error('down'));
+
+      const result = await service.findById(EVAL_ID);
+      expect(result.enrichmentFailed).toBe(true);
+      expect(result.projectTitle).toBeNull();
+    });
+
+    describe('anonimato', () => {
+      const anonymous = () =>
+        makeMockEvaluation({ isAnonymous: true, status: EvaluationStatus.COMPLETED });
+
+      beforeEach(() => {
+        mockHttpClient.post.mockImplementation((_svc: string, path: string) =>
+          Promise.resolve(
+            path.includes('users')
+              ? [{ userId: EVALUATOR_ID, firstName: 'Ana', lastName: 'Evaluadora' }]
+              : [],
+          ),
+        );
+      });
+
+      it('oculta evaluatorId/evaluatorName al evaluado', async () => {
+        mockEvaluationRepo.findOne.mockResolvedValue(anonymous());
+
+        const result = await service.findById(EVAL_ID, { id: EVALUATED_ID, role: 'student' });
+
+        expect(result.evaluatorId).toBeNull();
+        expect(result.evaluatorName).toBeNull();
+      });
+
+      it('el propio evaluador sí ve sus datos', async () => {
+        mockEvaluationRepo.findOne.mockResolvedValue(anonymous());
+
+        const result = await service.findById(EVAL_ID, { id: EVALUATOR_ID, role: 'company' });
+
+        expect(result.evaluatorId).toBe(EVALUATOR_ID);
+        expect(result.evaluatorName).toBe('Ana Evaluadora');
+      });
+
+      it('un admin sí ve al evaluador', async () => {
+        mockEvaluationRepo.findOne.mockResolvedValue(anonymous());
+
+        const result = await service.findById(EVAL_ID, { id: 'admin-id', role: 'admin' });
+
+        expect(result.evaluatorId).toBe(EVALUATOR_ID);
+      });
+
+      it('una evaluación NO anónima no se enmascara', async () => {
+        mockEvaluationRepo.findOne.mockResolvedValue(makeMockEvaluation({ isAnonymous: false }));
+
+        const result = await service.findById(EVAL_ID, { id: EVALUATED_ID, role: 'student' });
+
+        expect(result.evaluatorId).toBe(EVALUATOR_ID);
+      });
+
+      it('la lista "recibidas" nunca expone al evaluador de una anónima', async () => {
+        mockEvaluationRepo.findAndCount.mockResolvedValue([[anonymous()], 1]);
+
+        const result = await service.findByEvaluated(EVALUATED_ID, { page: 1, limit: 10 });
+
+        expect(result.data[0].evaluatorId).toBeNull();
+        expect(result.data[0].evaluatorName).toBeNull();
+      });
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────
@@ -315,6 +475,20 @@ describe('EvaluationService', () => {
       expect(result.total).toBe(1);
       expect(result.page).toBe(1);
       expect(result.limit).toBe(10);
+    });
+
+    it('filtra por VARIOS estados a la vez (pendientes incluye in_progress)', async () => {
+      mockEvaluationRepo.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.findByEvaluator(EVALUATOR_ID, {
+        status: [EvaluationStatus.PENDING, EvaluationStatus.IN_PROGRESS],
+      });
+
+      const where = mockEvaluationRepo.findAndCount.mock.calls[0][0].where;
+      expect(where.evaluatorId).toBe(EVALUATOR_ID);
+      // FindOperator `In([...])`
+      expect(where.status.type).toBe('in');
+      expect(where.status.value).toEqual([EvaluationStatus.PENDING, EvaluationStatus.IN_PROGRESS]);
     });
   });
 

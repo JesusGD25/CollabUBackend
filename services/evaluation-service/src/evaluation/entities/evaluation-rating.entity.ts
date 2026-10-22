@@ -31,6 +31,16 @@ export class EvaluationRating {
   @Column({ type: 'text', nullable: true })
   comment: string | null;
 
+  /** Criterio calificado (nombre, categoría, peso). Lo adjunta `EvaluationService.attachCriteria`; no es columna. */
+  criterion?: {
+    id: string;
+    name: string;
+    description: string | null;
+    category: string;
+    weight: number;
+    ratingScale: string;
+  } | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

@@ -33,15 +33,16 @@ export class ProjectInternalController {
     @Query('companyId') companyId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('programId') programId?: string,
   ) {
-    return this.projectService.getInternalAnalyticsStats(companyId, from, to);
+    return this.projectService.getInternalAnalyticsStats(companyId, from, to, programId);
   }
 
   @Get('skills/demand')
   @ApiOperation({ summary: 'Demanda actual de habilidades en proyectos activos (uso interno)' })
   @ApiResponse({ status: 200, description: 'Demanda de habilidades agrupada por skill' })
-  async getSkillsDemand() {
-    return this.projectService.getInternalSkillsDemand();
+  async getSkillsDemand(@Query('programId') programId?: string) {
+    return this.projectService.getInternalSkillsDemand(programId);
   }
 
   @Get(':projectId/matching-data')

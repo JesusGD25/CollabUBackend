@@ -20,7 +20,7 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole, resolveDepartmentScope } from '@collab-u/shared';
 
 import { ProjectService } from './project.service';
 import {
@@ -377,11 +377,16 @@ export class ProjectController {
   @ApiOperation({ summary: 'Listar proyectos pendientes de aprobación (solo admin)' })
   @ApiResponse({ status: 200, description: 'Lista paginada de proyectos pendientes' })
   async getAdminPendingProjects(
+    @CurrentUser() user: any,
     @Query('page')   page?:   string,
     @Query('limit')  limit?:  string,
     @Query('search') search?: string,
+    @Query('programId') programId?: string,
   ) {
-    return this.projectService.getAdminPendingProjects({ page: Number(page), limit: Number(limit), search });
+    return this.projectService.getAdminPendingProjects(
+      { page: Number(page), limit: Number(limit), search, programId },
+      resolveDepartmentScope(user),
+    );
   }
 
   @Patch('admin/:projectId/review')
@@ -401,9 +406,12 @@ export class ProjectController {
       categories?: string[];
     },
   ) {
-    return this.projectService.reviewProject(projectId, user.userId, body.action, {
-      notes: body.notes,
-      categories: body.categories,
-    });
+    return this.projectService.reviewProject(
+      projectId,
+      user.userId,
+      body.action,
+      { notes: body.notes, categories: body.categories },
+      resolveDepartmentScope(user),
+    );
   }
 }

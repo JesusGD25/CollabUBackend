@@ -30,7 +30,7 @@ const mockAdminService = {
   getSettingByKey: jest.fn(),
 };
 
-const USER = { id: 'admin-uuid-1' };
+const USER = { id: 'admin-uuid-1', role: 'admin', adminLevel: 'super' };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -57,9 +57,9 @@ describe('AdminController', () => {
       const stats = { stats: { totalSupervisors: 5, currentPeriod: '2025-A' } };
       mockAdminService.getDashboard.mockResolvedValue(stats);
 
-      const result = await controller.getDashboard();
+      const result = await controller.getDashboard({ id: 'f1', role: 'admin', adminLevel: 'super' });
 
-      expect(mockAdminService.getDashboard).toHaveBeenCalled();
+      expect(mockAdminService.getDashboard).toHaveBeenCalledWith({ all: true });
       expect(result).toEqual(stats);
     });
   });
@@ -82,7 +82,7 @@ describe('AdminController', () => {
       const created = { id: 'p-1', ...dto, status: PeriodStatus.PLANNING };
       mockAdminService.createPeriod.mockResolvedValue(created);
 
-      const result = await controller.createPeriod(dto as any);
+      const result = await controller.createPeriod({ id: 'f1', role: 'admin', adminLevel: 'super' }, dto as any);
 
       expect(mockAdminService.createPeriod).toHaveBeenCalledWith(dto);
       expect(result).toEqual(created);
@@ -106,7 +106,7 @@ describe('AdminController', () => {
       const updated = { id: 'p-1', name: '2025-A', isCurrent: true };
       mockAdminService.updatePeriod.mockResolvedValue(updated);
 
-      const result = await controller.updatePeriod('p-1', { isCurrent: true });
+      const result = await controller.updatePeriod({ id: 'f1', role: 'admin', adminLevel: 'super' }, 'p-1', { isCurrent: true });
 
       expect(mockAdminService.updatePeriod).toHaveBeenCalledWith('p-1', { isCurrent: true });
       expect(result).toEqual(updated);
@@ -131,7 +131,7 @@ describe('AdminController', () => {
       const created = { id: 'prog-1', ...dto };
       mockAdminService.createProgram.mockResolvedValue(created);
 
-      const result = await controller.createProgram(dto as any);
+      const result = await controller.createProgram({ id: 'f1', role: 'admin', adminLevel: 'super' }, dto as any);
 
       expect(mockAdminService.createProgram).toHaveBeenCalledWith(dto);
       expect(result).toEqual(created);
@@ -143,10 +143,16 @@ describe('AdminController', () => {
       const paginated = { data: [], total: 0, page: 1, limit: 20, totalPages: 0 };
       mockAdminService.getCompanyVerifications.mockResolvedValue(paginated);
 
-      const result = await controller.getCompanyVerifications();
+      const result = await controller.getCompanyVerifications(USER);
 
       expect(mockAdminService.getCompanyVerifications).toHaveBeenCalledWith(undefined, undefined, undefined);
       expect(result).toEqual(paginated);
+    });
+
+    it('admin de departamento → 403 (el historial no está acotado por departamento)', () => {
+      const dept = { id: 'a2', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' };
+      expect(() => controller.getCompanyVerifications(dept)).toThrow(/solo está disponible para el administrador de Facultad/);
+      expect(mockAdminService.getCompanyVerifications).not.toHaveBeenCalled();
     });
   });
 
@@ -161,6 +167,11 @@ describe('AdminController', () => {
       expect(mockAdminService.verifyCompany).toHaveBeenCalledWith(USER.id, { ...dto, companyId: 'company-1' });
       expect(result).toEqual(verification);
     });
+
+    it('admin de departamento → 403', () => {
+      const dept = { id: 'a2', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' };
+      expect(() => controller.verifyCompany(dept, 'company-1', {} as any)).toThrow(/solo está disponible para el administrador de Facultad/);
+    });
   });
 
   describe('createSupervisor', () => {
@@ -169,9 +180,9 @@ describe('AdminController', () => {
       const created = { id: 'sup-1', ...dto };
       mockAdminService.createSupervisor.mockResolvedValue(created);
 
-      const result = await controller.createSupervisor(dto as any);
+      const result = await controller.createSupervisor({ id: 'f1', role: 'admin', adminLevel: 'super' }, dto as any);
 
-      expect(mockAdminService.createSupervisor).toHaveBeenCalledWith(dto);
+      expect(mockAdminService.createSupervisor).toHaveBeenCalledWith(dto, { all: true });
       expect(result).toEqual(created);
     });
   });
@@ -191,7 +202,7 @@ describe('AdminController', () => {
 
       const result = await controller.assignSupervisor(USER, dto as any);
 
-      expect(mockAdminService.assignSupervisor).toHaveBeenCalledWith(USER.id, dto);
+      expect(mockAdminService.assignSupervisor).toHaveBeenCalledWith(USER.id, dto, { all: true });
       expect(result).toEqual(assignment);
     });
   });
@@ -247,6 +258,26 @@ describe('AdminController', () => {
 
       expect(mockAdminService.getSettingByKey).toHaveBeenCalledWith('max_applications');
       expect(result).toEqual(setting);
+    });
+  });
+
+  describe('subroles de administrador', () => {
+    const DEPT = { id: 'a1', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' };
+
+    it('un admin de departamento NO puede crear períodos, programas, categorías de rechazo ni ajustes (solo Facultad)', () => {
+      expect(() => controller.createPeriod(DEPT, {} as any)).toThrow();
+      expect(() => controller.updatePeriod(DEPT, 'p-1', {} as any)).toThrow();
+      expect(() => controller.createProgram(DEPT, {} as any)).toThrow();
+      expect(() => controller.updateProgram(DEPT, 'p-1', {} as any)).toThrow();
+      expect(() => controller.createRejectionCategory(DEPT, {} as any)).toThrow();
+      expect(() => controller.updateRejectionCategory(DEPT, 'c-1', {} as any)).toThrow();
+      expect(() => controller.upsertSetting(DEPT, {} as any)).toThrow();
+      expect(mockAdminService.createPeriod).not.toHaveBeenCalled();
+    });
+
+    it('el admin de departamento llega a los servicios con su alcance', () => {
+      controller.createSupervisor(DEPT, {} as any);
+      expect(mockAdminService.createSupervisor).toHaveBeenCalledWith({}, { all: false, departmentId: 'dept-sis' });
     });
   });
 });

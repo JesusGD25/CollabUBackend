@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
-import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
+import { EventPublisher, MicroserviceHttpClient, DepartmentScope } from '@collab-u/shared';
 
 import { Project, ProjectStatus } from './entities/project.entity';
 import { ProjectRequirement } from './entities/project-requirement.entity';
@@ -971,7 +971,10 @@ export class ProjectService {
 
   // ── ADMIN ──
 
-  async getAdminPendingProjects(query: { page?: number; limit?: number; search?: string }) {
+  async getAdminPendingProjects(
+    query: { page?: number; limit?: number; search?: string; programId?: string },
+    scope: DepartmentScope | null = null,
+  ) {
     const page  = Math.max(1, Number(query.page)  || 1);
     const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
 
@@ -983,6 +986,15 @@ export class ProjectService {
 
     if (query.search) {
       qb.andWhere('(p.title ILIKE :s OR p.description ILIKE :s)', { s: `%${query.search}%` });
+    }
+
+    // Admin de departamento: solo proyectos que declaran SU programa (un proyecto multi-departamento
+    // lo ve cada uno de sus admins). `academic_programs` es un simple-array → lista separada por comas.
+    const programFilter = scope && !scope.all ? scope.departmentId : query.programId;
+    if (programFilter) {
+      qb.andWhere("(',' || COALESCE(p.academic_programs, '') || ',') LIKE :programLike", {
+        programLike: `%,${programFilter},%`,
+      });
     }
 
     const [data, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
@@ -1000,9 +1012,14 @@ export class ProjectService {
       notes?: string;
       categories?: string[];
     } = {},
+    scope: DepartmentScope | null = null,
   ) {
     const project = await this.projectRepo.findOne({ where: { id: projectId } });
     if (!project) throw new NotFoundException('Proyecto no encontrado');
+    // Fuera del alcance del admin de departamento → se oculta como inexistente.
+    if (scope && !scope.all && !(project.academicPrograms ?? []).includes(scope.departmentId)) {
+      throw new NotFoundException('Proyecto no encontrado');
+    }
     if (project.status !== ProjectStatus.PENDING_APPROVAL) {
       throw new BadRequestException('El proyecto no está pendiente de aprobación');
     }
@@ -1079,9 +1096,13 @@ export class ProjectService {
 
   // ── ANALYTICS INTERNO (agregados para analytics-service) ──
 
-  private buildAnalyticsStatsQuery(companyId?: string, from?: string, to?: string) {
+  /** Condición SQL: el proyecto declara el departamento (academic_programs es un simple-array "a,b,c"). */
+  private static readonly PROGRAM_LIKE = "(',' || COALESCE(project.academic_programs, '') || ',') LIKE :programLike";
+
+  private buildAnalyticsStatsQuery(companyId?: string, from?: string, to?: string, programId?: string) {
     const qb = this.projectRepo.createQueryBuilder('project');
     if (companyId) qb.andWhere('project.companyId = :companyId', { companyId });
+    if (programId) qb.andWhere(ProjectService.PROGRAM_LIKE, { programLike: `%,${programId},%` });
     if (from) qb.andWhere('project.createdAt >= :from', { from });
     if (to) qb.andWhere('project.createdAt <= :to', { to });
     return qb;
@@ -1091,15 +1112,16 @@ export class ProjectService {
     companyId?: string,
     from?: string,
     to?: string,
+    programId?: string,
   ): Promise<{
     totalCreated: number;
     byStatus: Record<string, number>;
     activeCount: number;
     avgTimeToFillDays: number | null;
   }> {
-    const totalCreated = await this.buildAnalyticsStatsQuery(companyId, from, to).getCount();
+    const totalCreated = await this.buildAnalyticsStatsQuery(companyId, from, to, programId).getCount();
 
-    const statusRows = await this.buildAnalyticsStatsQuery(companyId, from, to)
+    const statusRows = await this.buildAnalyticsStatsQuery(companyId, from, to, programId)
       .select('project.status', 'status')
       .addSelect('COUNT(*)', 'count')
       .groupBy('project.status')
@@ -1121,7 +1143,12 @@ export class ProjectService {
     if (companyId) {
       activeWhere.companyId = companyId;
     }
-    const activeCount = await this.projectRepo.count({ where: activeWhere });
+    const activeQb = this.projectRepo.createQueryBuilder('project').where('project.status IN (:...activeStatuses)', {
+      activeStatuses: [ProjectStatus.PUBLISHED, ProjectStatus.IN_PROGRESS],
+    });
+    if (companyId) activeQb.andWhere('project.companyId = :companyId', { companyId });
+    if (programId) activeQb.andWhere(ProjectService.PROGRAM_LIKE, { programLike: `%,${programId},%` });
+    const activeCount = await activeQb.getCount();
 
     // avgTimeToFillDays: project-service no tiene columna publishedAt/startedAt — solo
     // existen createdAt, updatedAt, facultyReviewedAt y submittedForReviewAt, ninguna de
@@ -1135,15 +1162,17 @@ export class ProjectService {
     return { totalCreated, byStatus, activeCount, avgTimeToFillDays };
   }
 
-  async getInternalSkillsDemand(): Promise<
+  async getInternalSkillsDemand(programId?: string): Promise<
     Record<string, { demandCount: number; category: string; name: string }>
   > {
-    const rows = await this.skillRepo
+    const qb = this.skillRepo
       .createQueryBuilder('skill')
       .innerJoin('skill.project', 'project')
       .where('project.status IN (:...statuses)', {
         statuses: [ProjectStatus.PUBLISHED, ProjectStatus.IN_PROGRESS],
-      })
+      });
+    if (programId) qb.andWhere(ProjectService.PROGRAM_LIKE, { programLike: `%,${programId},%` });
+    const rows = await qb
       .select('skill.catalogSkillId', 'catalogSkillId')
       .addSelect('skill.name', 'name')
       .addSelect('skill.category', 'category')

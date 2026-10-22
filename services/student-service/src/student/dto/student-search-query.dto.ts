@@ -21,6 +21,11 @@ export class StudentSearchQueryDto {
   @IsString()
   program?: string;
 
+  /** Departamento (programa académico). Un admin de departamento siempre queda restringido al suyo. */
+  @IsOptional()
+  @IsString()
+  programId?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

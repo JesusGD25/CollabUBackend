@@ -1,5 +1,5 @@
 import { IsOptional, IsEnum, IsUUID, IsInt, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { EvaluationType, EvaluationStatus } from '../entities/enums';
 
@@ -9,10 +9,14 @@ export class EvaluationQueryDto {
   @IsEnum(EvaluationType)
   evaluationType?: EvaluationType;
 
-  @ApiPropertyOptional({ enum: EvaluationStatus })
+  /** Uno o varios estados separados por coma, p. ej. `pending,in_progress`. */
+  @ApiPropertyOptional({ enum: EvaluationStatus, isArray: true, example: 'pending,in_progress' })
   @IsOptional()
-  @IsEnum(EvaluationStatus)
-  status?: EvaluationStatus;
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.split(',').map((s) => s.trim()).filter(Boolean) : value,
+  )
+  @IsEnum(EvaluationStatus, { each: true })
+  status?: EvaluationStatus[];
 
   @ApiPropertyOptional()
   @IsOptional()

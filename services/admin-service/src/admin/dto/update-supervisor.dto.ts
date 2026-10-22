@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsEnum, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsEnum, IsUUID, MaxLength } from 'class-validator';
 import { SupervisorRole } from '../entities/supervisor.entity';
 
 export class UpdateSupervisorDto {
@@ -11,6 +11,10 @@ export class UpdateSupervisorDto {
   @IsString()
   @MaxLength(200)
   department?: string;
+
+  @IsOptional()
+  @IsUUID()
+  programId?: string;
 
   @IsOptional()
   @IsEnum(SupervisorRole)

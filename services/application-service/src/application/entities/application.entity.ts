@@ -29,6 +29,14 @@ export class Application {
   @Column({ name: 'student_id' })
   studentId: string;
 
+  /**
+   * Departamento (programa académico) del estudiante al momento de postular. Es la clave del alcance de
+   * los administradores de departamento sobre colas, asignaciones y expedientes.
+   */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  @Index('idx_applications_program')
+  programId: string | null;
+
   @Column({
     type: 'enum',
     enum: ApplicationStatus,

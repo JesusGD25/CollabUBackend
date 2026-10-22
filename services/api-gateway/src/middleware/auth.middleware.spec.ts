@@ -288,4 +288,84 @@ describe('GatewayAuthMiddleware', () => {
       expect(next).not.toHaveBeenCalled();
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ALCANCE DE ADMINISTRADOR (nivel / departamento)
+  // ═══════════════════════════════════════════════════════════════════
+  describe('alcance de administrador', () => {
+    const adminToken = (data: Record<string, unknown>) => {
+      mockHttpService.post.mockReturnValue(of({ data: { id: 'admin-1', email: 'a@udenar.edu.co', role: 'admin', ...data } } as AxiosResponse));
+    };
+
+    it('inyecta x-user-admin-level y x-user-department-id de un admin de departamento', async () => {
+      const req = createReq({ headers: { authorization: 'Bearer t' } });
+      adminToken({ adminLevel: 'department', departmentId: 'dept-sistemas' });
+
+      await middleware.use(req, createRes(), next);
+
+      expect(req.headers['x-user-admin-level']).toBe('department');
+      expect(req.headers['x-user-department-id']).toBe('dept-sistemas');
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('un superadmin recibe nivel "super" y ningún departamento', async () => {
+      const req = createReq({ headers: { authorization: 'Bearer t' } });
+      adminToken({ adminLevel: 'super', departmentId: null });
+
+      await middleware.use(req, createRes(), next);
+
+      expect(req.headers['x-user-admin-level']).toBe('super');
+      expect(req.headers['x-user-department-id']).toBeUndefined();
+    });
+
+    it('un cliente NO puede suplantar el nivel: las cabeceras que envía se descartan y se usan las del token', async () => {
+      const req = createReq({
+        headers: { authorization: 'Bearer t', 'x-user-admin-level': 'super', 'x-user-department-id': 'otro-departamento' },
+      });
+      adminToken({ adminLevel: 'department', departmentId: 'dept-civil' });
+
+      await middleware.use(req, createRes(), next);
+
+      expect(req.headers['x-user-admin-level']).toBe('department');
+      expect(req.headers['x-user-department-id']).toBe('dept-civil');
+    });
+
+    it('un estudiante que envía x-user-admin-level: super NO lo conserva', async () => {
+      const req = createReq({
+        headers: { authorization: 'Bearer t', 'x-user-admin-level': 'super' },
+      });
+      mockHttpService.post.mockReturnValue(of({ data: { id: 's-1', email: 's@udenar.edu.co', role: 'student' } } as AxiosResponse));
+
+      await middleware.use(req, createRes(), next);
+
+      expect(req.headers['x-user-admin-level']).toBeUndefined();
+      expect(req.headers['x-user-department-id']).toBeUndefined();
+    });
+
+    it('en una ruta pública sin token también se descartan las cabeceras de alcance enviadas por el cliente', async () => {
+      const req = createReq({
+        path: '/api/v1/auth/login',
+        method: 'POST',
+        headers: { 'x-user-admin-level': 'super', 'x-user-department-id': 'x' },
+      });
+
+      await middleware.use(req, createRes(), next);
+
+      expect(req.headers['x-user-admin-level']).toBeUndefined();
+      expect(req.headers['x-user-department-id']).toBeUndefined();
+      expect(next).toHaveBeenCalled();
+    });
+
+    it('con un token inválido en ruta pública tampoco sobrevive el alcance falsificado', async () => {
+      const req = createReq({
+        path: '/api/v1/projects',
+        headers: { authorization: 'Bearer malo', 'x-user-admin-level': 'super' },
+      });
+      mockHttpService.post.mockReturnValue(throwError(() => new Error('401')));
+
+      await middleware.use(req, createRes(), next);
+
+      expect(req.headers['x-user-admin-level']).toBeUndefined();
+    });
+  });
 });
