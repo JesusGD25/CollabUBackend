@@ -49,7 +49,7 @@ try {
   r = await call('GET', '/admin/supervisors/my-students?enriched=true&limit=100', t);
   const rows = r.data?.data || r.data || [];
   const pend = rows.filter((x) => x.status === 'pending_acceptance');
-  check(pend.length >= 2, 'Marta Ríos: asignaciones pendientes de aceptar', `${pend.length}`);
+  check(pend.length >= 1, 'Marta Ríos: asignación pendiente de aceptar (la demo acepta una)', `${pend.length}`);
 
   // 5. Admin de departamento (Sistemas)
   t = await login('admin.sistemas@collabu.dev');
