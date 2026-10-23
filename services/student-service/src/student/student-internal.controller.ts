@@ -27,6 +27,23 @@ export class StudentInternalController {
     return this.studentService.getMatchingData(userId);
   }
 
+  @Get(':userId/basic-info')
+  @ApiOperation({ summary: 'Obtener datos básicos de estudiante (uso interno)' })
+  @ApiParam({ name: 'userId', type: 'string', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Datos básicos obtenidos' })
+  @ApiResponse({ status: 404, description: 'Estudiante no encontrado' })
+  async getBasicInfo(@Param('userId', ParseUUIDPipe) userId: string) {
+    const profile = await this.studentService.getProfileById(userId);
+    return {
+      userId: profile.userId,
+      studentId: profile.id,
+      program: profile.program,
+      semester: profile.semester,
+      averageRating: profile.averageRating,
+      totalRatings: profile.totalRatings,
+    };
+  }
+
   @Get('analytics/stats')
   @ApiOperation({ summary: 'Estadísticas agregadas de estudiantes (uso interno)' })
   @ApiQuery({ name: 'from', required: false, type: 'string' })

@@ -35,8 +35,6 @@ import {
 import { EvaluationType } from './entities/enums';
 
 @ApiTags('Evaluations')
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('api/v1/evaluations')
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
@@ -46,7 +44,9 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear una evaluación pendiente' })
   @ApiResponse({ status: 201, description: 'Evaluación creada' })
@@ -56,21 +56,24 @@ export class EvaluationController {
   }
 
   @Get('my/as-evaluator')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver mis evaluaciones como evaluador' })
   getMyEvaluations(@CurrentUser() user: any, @Query() query: EvaluationQueryDto) {
     return this.evaluationService.findByEvaluator(user.id, query);
   }
 
   @Get('my/as-evaluated')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver evaluaciones recibidas sobre mí' })
   getEvaluationsAboutMe(@CurrentUser() user: any, @Query() query: EvaluationQueryDto) {
     return this.evaluationService.findByEvaluated(user.id, query);
   }
 
   @Get('criteria')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver criterios de evaluación activos' })
   @ApiQuery({ name: 'evaluationType', required: false, enum: EvaluationType })
   getCriteria(@Query('evaluationType') evaluationType?: EvaluationType) {
@@ -78,7 +81,9 @@ export class EvaluationController {
   }
 
   @Post('criteria')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear un criterio de evaluación (admin)' })
   createCriterion(@CurrentUser() user: any, @Body() dto: CreateCriterionDto) {
@@ -87,7 +92,9 @@ export class EvaluationController {
   }
 
   @Get('templates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver plantillas de evaluación' })
   @ApiQuery({ name: 'evaluationType', required: false, enum: EvaluationType })
   getTemplates(@Query('evaluationType') evaluationType?: EvaluationType) {
@@ -95,15 +102,36 @@ export class EvaluationController {
   }
 
   @Get('aggregate/:userId')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver puntuaciones agregadas de un usuario evaluado' })
   @ApiParam({ name: 'userId', type: 'string' })
   getAggregateScores(@Param('userId', ParseUUIDPipe) userId: string) {
     return this.evaluationService.getAggregateScores(userId);
   }
 
+  @Get('company/:companyId')
+  @ApiOperation({ summary: 'Ver evaluaciones públicas de una empresa' })
+  @ApiParam({ name: 'companyId', type: 'string' })
+  getPublicCompanyEvaluations(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Query() query: EvaluationQueryDto,
+  ) {
+    return this.evaluationService.getPublicEvaluations(companyId, 'company', query);
+  }
+
+  @Get('student/:studentId')
+  @ApiOperation({ summary: 'Ver evaluaciones públicas de un estudiante' })
+  @ApiParam({ name: 'studentId', type: 'string' })
+  getPublicStudentEvaluations(
+    @Param('studentId', ParseUUIDPipe) studentId: string,
+    @Query() query: EvaluationQueryDto,
+  ) {
+    return this.evaluationService.getPublicEvaluations(studentId, 'student', query);
+  }
+
   @Get('application/:applicationId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver evaluaciones de una postulación' })
   @ApiParam({ name: 'applicationId', type: 'string' })
   getByApplication(
@@ -114,7 +142,9 @@ export class EvaluationController {
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver detalle de una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
@@ -122,7 +152,9 @@ export class EvaluationController {
   }
 
   @Post(':id/submit')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Completar y enviar una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })
@@ -142,7 +174,9 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Post('templates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear plantilla de evaluación (admin)' })
   createTemplate(@Body() dto: CreateTemplateDto, @CurrentUser() user: any) {
@@ -151,7 +185,9 @@ export class EvaluationController {
   }
 
   @Patch('templates/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Actualizar plantilla (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
   updateTemplate(
@@ -164,7 +200,9 @@ export class EvaluationController {
   }
 
   @Delete('templates/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar plantilla (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
@@ -178,7 +216,9 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Patch('criteria/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Actualizar criterio (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
   updateCriterion(
@@ -191,7 +231,9 @@ export class EvaluationController {
   }
 
   @Delete('criteria/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar criterio (admin)' })
   @ApiParam({ name: 'id', type: 'string' })

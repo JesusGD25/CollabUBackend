@@ -648,6 +648,124 @@ export class EvaluationService implements OnModuleInit {
     return { data, total, page, limit };
   }
 
+  async getPublicEvaluations(
+    targetId: string,
+    targetType: 'company' | 'student',
+    query: EvaluationQueryDto = {},
+  ): Promise<{
+    evaluations: Evaluation[];
+    stats: {
+      averageRating: number | null;
+      totalReviews: number;
+      distribution: Record<number, number>;
+    };
+    pagination: {
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    };
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.max(1, query.limit ?? 10);
+    const skip = (page - 1) * limit;
+
+    const candidateIds = new Set<string>([targetId]);
+
+    if (targetType === 'company') {
+      try {
+        const comp = await this.httpClient
+          .get<{ userId?: string; companyId?: string }>(
+            'company',
+            `/internal/companies/${targetId}/basic-info`,
+          )
+          .catch(() => null);
+        if (comp?.userId) candidateIds.add(comp.userId);
+        if (comp?.companyId) candidateIds.add(comp.companyId);
+      } catch {
+        // best effort
+      }
+    } else {
+      try {
+        const stud = await this.httpClient
+          .get<{ userId?: string; studentId?: string }>(
+            'student',
+            `/internal/students/${targetId}/basic-info`,
+          )
+          .catch(() => null);
+        if (stud?.userId) candidateIds.add(stud.userId);
+        if (stud?.studentId) candidateIds.add(stud.studentId);
+      } catch {
+        // best effort
+      }
+    }
+
+    const types =
+      targetType === 'company'
+        ? [EvaluationType.STUDENT_EVALUATES_COMPANY]
+        : [
+            EvaluationType.COMPANY_EVALUATES_STUDENT,
+            EvaluationType.SUPERVISOR_EVALUATES_STUDENT,
+          ];
+
+    const allCompleted = await this.evaluationRepo.find({
+      where: [...candidateIds].map((id) => ({
+        evaluatedId: id,
+        status: EvaluationStatus.COMPLETED,
+        evaluationType: In(types),
+      })),
+      order: { completedAt: 'DESC', createdAt: 'DESC' },
+    });
+
+    const totalReviews = allCompleted.length;
+    const withScore = allCompleted.filter((e) => e.overallScore !== null);
+    const averageScore =
+      withScore.length > 0
+        ? withScore.reduce((sum, e) => sum + Number(e.overallScore), 0) / withScore.length
+        : null;
+    const averageRating =
+      averageScore !== null ? Math.round((averageScore / 20) * 10) / 10 : null;
+
+    const distribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const e of withScore) {
+      const stars = Math.min(5, Math.max(1, Math.round(Number(e.overallScore) / 20)));
+      distribution[stars] = (distribution[stars] || 0) + 1;
+    }
+
+    const paged = allCompleted.slice(skip, skip + limit);
+
+    if (paged.length > 0) {
+      const pagedIds = paged.map((e) => e.id);
+      const ratings = await this.ratingRepo.find({
+        where: { evaluationId: In(pagedIds) },
+      });
+      const byEvaluation = new Map<string, EvaluationRating[]>();
+      for (const r of ratings) {
+        if (!byEvaluation.has(r.evaluationId)) byEvaluation.set(r.evaluationId, []);
+        byEvaluation.get(r.evaluationId)!.push(r);
+      }
+      for (const e of paged) e.ratings = byEvaluation.get(e.id) ?? [];
+      await this.attachCriteria(paged);
+      await this.enrichEvaluations(paged);
+      this.maskAnonymity(paged);
+    }
+
+    return {
+      evaluations: paged,
+      stats: {
+        averageRating,
+        totalReviews,
+        distribution,
+      },
+      pagination: {
+        total: totalReviews,
+        page,
+        limit,
+        totalPages: Math.ceil(totalReviews / limit) || 1,
+      },
+    };
+  }
+
   async getAggregateScores(evaluatedId: string): Promise<{
     averageScore: number | null;
     completedCount: number;

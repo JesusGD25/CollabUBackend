@@ -30,6 +30,7 @@ const mockEvaluationService = {
   createCriterion: jest.fn(),
   getTemplates: jest.fn(),
   createTemplate: jest.fn(),
+  getPublicEvaluations: jest.fn(),
 };
 
 // ──────────────────────────────────────────────────────────────────
@@ -233,6 +234,30 @@ describe('EvaluationController', () => {
         EVALUATOR_ID,
         dto,
       );
+    });
+  });
+
+  describe('public evaluations', () => {
+    it('debería delegar getPublicCompanyEvaluations a evaluationService.getPublicEvaluations con company', async () => {
+      const expected = { evaluations: [], stats: { averageRating: 4.8, totalReviews: 5, distribution: {} }, pagination: {} };
+      mockEvaluationService.getPublicEvaluations.mockResolvedValue(expected);
+
+      const query: EvaluationQueryDto = { page: 1, limit: 10 };
+      const result = await controller.getPublicCompanyEvaluations(EVALUATED_ID, query);
+
+      expect(result).toBe(expected);
+      expect(mockEvaluationService.getPublicEvaluations).toHaveBeenCalledWith(EVALUATED_ID, 'company', query);
+    });
+
+    it('debería delegar getPublicStudentEvaluations a evaluationService.getPublicEvaluations con student', async () => {
+      const expected = { evaluations: [], stats: { averageRating: 5.0, totalReviews: 2, distribution: {} }, pagination: {} };
+      mockEvaluationService.getPublicEvaluations.mockResolvedValue(expected);
+
+      const query: EvaluationQueryDto = { page: 1, limit: 10 };
+      const result = await controller.getPublicStudentEvaluations(EVALUATED_ID, query);
+
+      expect(result).toBe(expected);
+      expect(mockEvaluationService.getPublicEvaluations).toHaveBeenCalledWith(EVALUATED_ID, 'student', query);
     });
   });
 
