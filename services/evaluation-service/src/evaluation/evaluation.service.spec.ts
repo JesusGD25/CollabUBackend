@@ -613,4 +613,52 @@ describe('EvaluationService', () => {
       );
     });
   });
+
+  // ──────────────────────────────────────────────────────────────────
+  // getPublicEvaluations
+  // ──────────────────────────────────────────────────────────────────
+  describe('getPublicEvaluations', () => {
+    it('debería retornar evaluaciones completadas y estadísticas de empresa', async () => {
+      const eval1 = makeMockEvaluation({
+        id: 'eval-1',
+        evaluationType: EvaluationType.STUDENT_EVALUATES_COMPANY,
+        status: EvaluationStatus.COMPLETED,
+        overallScore: 90,
+        overallComment: 'Excelente empresa para pasantías',
+        isAnonymous: false,
+      });
+      const eval2 = makeMockEvaluation({
+        id: 'eval-2',
+        evaluationType: EvaluationType.STUDENT_EVALUATES_COMPANY,
+        status: EvaluationStatus.COMPLETED,
+        overallScore: 100,
+        overallComment: 'Gran experiencia',
+        isAnonymous: true,
+      });
+
+      mockEvaluationRepo.find.mockResolvedValue([eval1, eval2]);
+      mockRatingRepo.find.mockResolvedValue([]);
+      mockHttpClient.get.mockRejectedValue(new Error('no basic info'));
+      mockHttpClient.post.mockResolvedValue([]);
+
+      const result = await service.getPublicEvaluations(EVALUATED_ID, 'company');
+
+      expect(result.evaluations).toHaveLength(2);
+      expect(result.stats.totalReviews).toBe(2);
+      expect(result.stats.averageRating).toBe(4.8);
+      expect(result.stats.distribution[5]).toBe(2);
+      expect(result.evaluations[1].evaluatorName).toBeNull();
+    });
+
+    it('debería retornar stats vacías cuando no hay evaluaciones', async () => {
+      mockEvaluationRepo.find.mockResolvedValue([]);
+      mockHttpClient.get.mockRejectedValue(new Error('no basic info'));
+
+      const result = await service.getPublicEvaluations(EVALUATED_ID, 'student');
+
+      expect(result.evaluations).toHaveLength(0);
+      expect(result.stats.totalReviews).toBe(0);
+      expect(result.stats.averageRating).toBeNull();
+    });
+  });
 });
