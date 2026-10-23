@@ -83,6 +83,8 @@ export const deptLoose = [
     { reason: 'No asistió a la entrevista presencial.', interview: { daysAgo: 7, time: '15:30:00-05', type: 'in_person', status: 'no_show', location: 'GeoData Andina, Calle 16 # 29-14, Pasto' } }],
   ['PV_VISOR', 'S14', 'withdrawn', '2026-10-04 10:00:00-05', 'Quisiera construir el servicio de mapas con APIs.',
     { reason: 'Conseguí una práctica en otra empresa.', interview: { daysAhead: 6, time: '11:30:00-05', type: 'technical', status: 'cancelled', link: 'https://meet.example.com/geodata-visor-s14', cancelledReason: 'El estudiante retiró su postulación.' } }],
+  ['PV_VISOR', 'V9', 'withdrawn', '2026-10-05 15:00:00-05', 'Quisiera aplicar mi experiencia en control de calidad a la validación de la información geoespacial.',
+    { reason: 'Decidí continuar con el proceso de BIM.', interview: { daysAhead: 5, time: '15:00:00-05', type: 'video', status: 'cancelled', link: 'https://meet.example.com/geodata-visor-v9', cancelledReason: 'La estudiante retiró su postulación.' } }],
   ['P_BIM', 'V4', 'interview', '2026-09-30 14:00:00-05', 'Mi trabajo con información de suelos me interesa unir con el modelado BIM.',
     { interview: { daysAhead: 7, time: '10:30:00-05', type: 'technical', status: 'rescheduled', link: 'https://meet.example.com/cimientos-bim-v4' } }],
   ['PV_VISOR', 'S15', 'rejected', '2026-10-02 12:30:00-05', 'Me interesa publicar información geoespacial con una API bien probada.',
@@ -128,6 +130,7 @@ export const deptThreads = [
     student: 'E5', project: 'PE_AIRE', stage: 'waiting_final_docs', period: '2026-2', applied: '2026-05-27 10:45:00-05',
     asesor: 'DOC-E03', jurados: ['DOC-E01', 'DOC-E04'], final: 'DOC-E02', correction: false,
     finalDocs: { informe: 'rejected', cert: 'pending' },
+    extraAsg: [{ role: 'asesor', code: 'DOC-E05', status: 'replaced', reason: 'Se reasignó el asesor por cambio de línea de investigación del proyecto; continuó DOC-E03.' }],
     letter: 'Mi familia vive cerca de las ladrilleras de la sierra y quiero medir el aire que respiran con una estación de bajo costo que yo misma diseñe.',
   },
   // ── Civil ──
