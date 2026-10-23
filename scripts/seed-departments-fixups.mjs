@@ -205,6 +205,21 @@ console.log('\n4g) Evaluaciones abiertas de proyectos en cierre');
   }
 }
 
+console.log('\n4h) Calificación de perfil (empresas y estudiantes sin promedio)');
+{
+  // Empresas/estudiantes del seed base con evaluaciones completadas pero con rating 0 en su perfil
+  // (evaluation-service lo sincroniza solo al evaluar). Evaluaciones 0-100 → perfil 0-5.
+  const avg = (types) => q('evaluation_db', `SELECT evaluated_id, round(avg(overall_score)/20, 2), count(*) FROM evaluations WHERE status = 'completed' AND overall_score IS NOT NULL AND evaluation_type IN (${types.map(quote).join(',')}) GROUP BY evaluated_id`);
+  let c = 0, s = 0;
+  for (const [id, rating, n] of avg(['student_evaluates_company'])) {
+    c += run('company_db', `WITH u AS (UPDATE companies SET rating = ${rating}, total_reviews = ${n} WHERE user_id = ${quote(id)} AND (rating IS NULL OR rating = 0) RETURNING 1) SELECT count(*) FROM u`, 'company rating');
+  }
+  for (const [id, rating, n] of avg(['company_evaluates_student', 'supervisor_evaluates_student'])) {
+    s += run('student_db', `WITH u AS (UPDATE student_profiles SET average_rating = ${rating}, total_ratings = ${n} WHERE user_id = ${quote(id)} AND (average_rating IS NULL OR average_rating = 0) RETURNING 1) SELECT count(*) FROM u`, 'student rating');
+  }
+  console.log(`  · ${c} empresas y ${s} estudiantes con calificación recalculada`);
+}
+
 console.log('\n4e) Cuentas bloqueadas del seed');
 {
   // El bloqueo por intentos fallidos vence con el tiempo: se renueva para que el caso de demostración siga vigente.

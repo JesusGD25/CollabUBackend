@@ -84,20 +84,21 @@ ON CONFLICT (id) DO NOTHING;
 \c evaluation_db;
 SET client_encoding = 'UTF8';
 
+-- overall_score en escala 0-100 (igual que seed_full_up.sql).
 INSERT INTO "evaluations" (id, application_id, project_id, evaluator_id, evaluated_id, evaluation_type, status,
   overall_score, overall_comment, strengths, areas_for_improvement, completed_at) VALUES
 ('e2000001-0000-4000-8000-000000000001','a1000002-0000-4000-8000-000000000001','a3cf1251-2362-4217-a7cf-27c05cd43296',
   '928b7648-201a-4ab8-8bbb-638a2e4f5490','b9addbae-f9b5-4577-b700-3b42a13edcd2','company_evaluates_student','completed',
-  4.6,'Muy buen desempeño técnico, cumplió los entregables a tiempo.','Autonomía, dominio técnico en backend.','Podría mejorar la documentación de su código.','2026-08-21 10:00:00-05'),
+  92,'Muy buen desempeño técnico, cumplió los entregables a tiempo.','Autonomía, dominio técnico en backend.','Podría mejorar la documentación de su código.','2026-08-21 10:00:00-05'),
 ('e2000001-0000-4000-8000-000000000002','a1000002-0000-4000-8000-000000000001','a3cf1251-2362-4217-a7cf-27c05cd43296',
   'b9addbae-f9b5-4577-b700-3b42a13edcd2','928b7648-201a-4ab8-8bbb-638a2e4f5490','student_evaluates_company','completed',
-  4.7,'Buen acompañamiento del equipo y claridad en los requerimientos.','Comunicación, mentoría constante.',NULL,'2026-08-21 11:00:00-05'),
+  94,'Buen acompañamiento del equipo y claridad en los requerimientos.','Comunicación, mentoría constante.',NULL,'2026-08-21 11:00:00-05'),
 ('e2000001-0000-4000-8000-000000000003','a1000002-0000-4000-8000-000000000002','3fa32d54-9bb9-43d9-8f32-9648f15f413e',
   '7e1cc874-aa38-4c57-8660-fbf182bfdbc7','afb35c03-179f-40ef-8017-39c77723845a','company_evaluates_student','completed',
-  4.4,'Reportes entregados con buena calidad y puntualidad.','Organización, atención al detalle.','Podría proponer más mejoras por iniciativa propia.','2026-08-23 10:00:00-05'),
+  88,'Reportes entregados con buena calidad y puntualidad.','Organización, atención al detalle.','Podría proponer más mejoras por iniciativa propia.','2026-08-23 10:00:00-05'),
 ('e2000001-0000-4000-8000-000000000004','a1000002-0000-4000-8000-000000000002','3fa32d54-9bb9-43d9-8f32-9648f15f413e',
   'afb35c03-179f-40ef-8017-39c77723845a','7e1cc874-aa38-4c57-8660-fbf182bfdbc7','student_evaluates_company','completed',
-  4.3,'Buen ambiente de trabajo, aunque los tiempos de respuesta podrían mejorar.','Ambiente laboral, disposición del equipo.','Tiempos de retroalimentación.','2026-08-23 11:00:00-05')
+  86,'Buen ambiente de trabajo, aunque los tiempos de respuesta podrían mejorar.','Ambiente laboral, disposición del equipo.','Tiempos de retroalimentación.','2026-08-23 11:00:00-05')
 ON CONFLICT (id) DO NOTHING;
 
 -- ── 3. Recalcular profile_completeness real para TODOS los estudiantes ──
