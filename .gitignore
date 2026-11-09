@@ -36,3 +36,6 @@ logs/
 # Coverage
 coverage/
 .nyc_output/
+
+# Seed showcase: SQL generado (depende del entorno: IDs de catalogo, URL publica, ruta de uploads)
+scripts/seed_showcase.sql

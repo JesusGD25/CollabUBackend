@@ -6,6 +6,7 @@ import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
 import { AdminController } from './admin.controller';
 import { AdminInternalController } from './admin-internal.controller';
 import { AdminService } from './admin.service';
+import { AssignmentWorkflowService } from './assignment-workflow.service';
 import { AdminEventsSubscriber } from './admin-events.subscriber';
 
 import {
@@ -44,6 +45,7 @@ import {
   controllers: [AdminController, AdminInternalController],
   providers: [
     AdminService,
+    AssignmentWorkflowService,
     AdminEventsSubscriber,
     EventPublisher,
     {

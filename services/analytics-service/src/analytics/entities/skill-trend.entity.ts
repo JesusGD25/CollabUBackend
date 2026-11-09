@@ -27,6 +27,14 @@ export class SkillTrend {
   @Column({ name: 'trend_direction', type: 'varchar', length: 20, nullable: true })
   trendDirection: 'rising' | 'stable' | 'declining' | null;
 
+  /** Categoría de la habilidad (language, framework, tool, concept, soft_skill) — permite filtrar por categoría. */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  category: string | null;
+
+  /** Departamento de la fila; null = total de la Facultad. */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
+
   @Column({ name: 'snapshot_date', type: 'date' })
   snapshotDate: Date;
 

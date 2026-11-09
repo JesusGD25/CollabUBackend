@@ -29,6 +29,10 @@ const MIME_VALIDATIONS: Record<string, { mimes: string[]; maxSize: number }> = {
     mimes: ['image/jpeg', 'image/png', 'image/webp'],
     maxSize: 5 * 1024 * 1024,
   },
+  company_logo: {
+    mimes: ['image/jpeg', 'image/png', 'image/webp'],
+    maxSize: 5 * 1024 * 1024,
+  },
   deliverable: {
     mimes: [
       'application/pdf', 'application/msword',
@@ -277,7 +281,12 @@ export class StorageService {
     userRole: string | null,
   ): Promise<boolean> {
     if (file.isPublic) return true;
-    if (file.category === FileCategory.CV || file.category === FileCategory.PORTFOLIO) return true;
+    if (
+      file.category === FileCategory.AVATAR ||
+      file.category === FileCategory.COMPANY_LOGO ||
+      file.category === FileCategory.CV ||
+      file.category === FileCategory.PORTFOLIO
+    ) return true;
     if (userId && file.ownerId === userId) return true;
     if (!userId) return false;
 

@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, UserRole, assertSuperAdmin } from '@collab-u/shared';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -25,6 +25,7 @@ import { ResendVerificationEmailDto } from './dto/resend-verification-email.dto'
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { CreateAdminUserDto, UpdateAdminUserDto } from './dto/admin-user.dto';
 
 @ApiTags('Auth')
 @Controller('api/v1/auth')
@@ -141,7 +142,8 @@ export class AuthController {
   @ApiOperation({ summary: 'Crear nuevo usuario desde el panel admin' })
   @ApiResponse({ status: 201, description: 'Usuario creado' })
   @ApiResponse({ status: 409, description: 'Email ya registrado' })
-  async createAdminUser(@Body() body: { email: string; password: string; role: string }) {
+  async createAdminUser(@Request() req: any, @Body() body: CreateAdminUserDto) {
+    assertSuperAdmin(req.user);
     return this.authService.createAdminUser(body);
   }
 
@@ -158,12 +160,14 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Lista paginada de usuarios' })
   @ApiResponse({ status: 403, description: 'Acceso denegado' })
   async getAdminUsers(
+    @Request() req: any,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('search') search?: string,
     @Query('role') role?: string,
     @Query('isActive') isActive?: string,
   ) {
+    assertSuperAdmin(req.user);
     return this.authService.getAdminUsers({ page: Number(page), limit: Number(limit), search, role, isActive });
   }
 
@@ -175,10 +179,12 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Usuario actualizado' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
   async updateAdminUser(
+    @Request() req: any,
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { isActive?: boolean; role?: string; email?: string; password?: string },
+    @Body() body: UpdateAdminUserDto,
   ) {
-    return this.authService.updateAdminUser(id, body);
+    assertSuperAdmin(req.user);
+    return this.authService.updateAdminUser(id, body, req.user.id);
   }
 
   @Delete('admin/users/:id')
@@ -189,7 +195,8 @@ export class AuthController {
   @ApiOperation({ summary: 'Eliminar un usuario permanentemente (solo admin)' })
   @ApiResponse({ status: 204, description: 'Usuario eliminado' })
   @ApiResponse({ status: 404, description: 'Usuario no encontrado' })
-  async deleteAdminUser(@Param('id', ParseUUIDPipe) id: string) {
-    await this.authService.deleteAdminUser(id);
+  async deleteAdminUser(@Request() req: any, @Param('id', ParseUUIDPipe) id: string) {
+    assertSuperAdmin(req.user);
+    await this.authService.deleteAdminUser(id, req.user.id);
   }
 }

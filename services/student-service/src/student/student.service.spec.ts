@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 
 import { EventPublisher, MicroserviceHttpClient } from '@collab-u/shared';
@@ -145,6 +145,63 @@ describe('StudentService', () => {
   // ═══════════════════════════════════════════════════════════════════
   describe('createProfile', () => {
     const dto = { userId: 'user-uuid-1', program: 'Ingeniería de Sistemas', semester: 6 };
+    const PROGRAMS = [
+      { id: 'prog-sis', name: 'Ingeniería de Sistemas', isActive: true },
+      { id: 'prog-ele', name: 'Ingeniería Electrónica', isActive: true },
+      { id: 'prog-civ', name: 'Ingeniería Civil', isActive: true },
+      { id: 'prog-old', name: 'Ingeniería Industrial', isActive: false },
+    ];
+
+    beforeEach(() => {
+      // Regla: todo estudiante pertenece a un programa ACTIVO del catálogo (admin-service).
+      mockHttpClient.get.mockResolvedValue(PROGRAMS);
+    });
+
+    it('guarda programId y el nombre OFICIAL del catálogo aunque llegue solo el texto', async () => {
+      const profile = createMockProfile();
+      profileRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(profile);
+      profileRepo.create.mockReturnValue(profile);
+      profileRepo.save.mockResolvedValue(profile);
+
+      await service.createProfile({ ...dto, program: '  ingeniería de sistemas ' });
+
+      expect(profileRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ program: 'Ingeniería de Sistemas', programId: 'prog-sis' }),
+      );
+    });
+
+    it('acepta programId directamente', async () => {
+      const profile = createMockProfile();
+      profileRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(profile);
+      profileRepo.create.mockReturnValue(profile);
+      profileRepo.save.mockResolvedValue(profile);
+
+      await service.createProfile({ userId: 'u', semester: 5, programId: 'prog-civ' } as any);
+
+      expect(profileRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ program: 'Ingeniería Civil', programId: 'prog-civ' }),
+      );
+    });
+
+    it.each([
+      ['sin programa', { userId: 'u', semester: 5 }],
+      ['programa que no existe', { userId: 'u', semester: 5, program: 'Ingeniería Naval' }],
+      ['programId que no existe', { userId: 'u', semester: 5, programId: 'prog-fantasma' }],
+      ['programa INACTIVO (Industrial)', { userId: 'u', semester: 5, program: 'Ingeniería Industrial' }],
+    ])('rechaza crear un estudiante %s (no existen estudiantes sin programa)', async (_label, input) => {
+      profileRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.createProfile(input as any)).rejects.toThrow(BadRequestException);
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('si admin-service no responde → 503 y no guarda nada (no inventa un programa)', async () => {
+      profileRepo.findOne.mockResolvedValue(null);
+      mockHttpClient.get.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(service.createProfile(dto)).rejects.toThrow(ServiceUnavailableException);
+      expect(profileRepo.save).not.toHaveBeenCalled();
+    });
 
     it('debería crear un perfil de estudiante', async () => {
       const profile = createMockProfile();
@@ -243,11 +300,94 @@ describe('StudentService', () => {
         service.updateProfile('non-existent', { bio: 'test' }),
       ).rejects.toThrow(NotFoundException);
     });
+
+    describe('programa obligatorio', () => {
+      const PROGRAMS = [
+        { id: 'prog-sis', name: 'Ingeniería de Sistemas', isActive: true },
+        { id: 'prog-ele', name: 'Ingeniería Electrónica', isActive: true },
+      ];
+
+      it('cambiar de programa guarda programId y nombre coherentes', async () => {
+        const profile = createMockProfile();
+        mockHttpClient.get.mockResolvedValue(PROGRAMS);
+        profileRepo.findOne.mockResolvedValue(profile);
+        profileRepo.save.mockImplementation(async (p: any) => p);
+
+        await service.updateProfile('user-uuid-1', { programId: 'prog-ele' } as any);
+
+        expect(profile.programId).toBe('prog-ele');
+        expect(profile.program).toBe('Ingeniería Electrónica');
+      });
+
+      it('un texto de programa que no existe se RECHAZA (antes dejaba programId en null)', async () => {
+        const profile = createMockProfile();
+        mockHttpClient.get.mockResolvedValue(PROGRAMS);
+        profileRepo.findOne.mockResolvedValue(profile);
+
+        await expect(service.updateProfile('user-uuid-1', { program: 'Ingeniería Naval' } as any)).rejects.toThrow(BadRequestException);
+        expect(profileRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('un PATCH que no toca el programa NO consulta el catálogo ni lo modifica', async () => {
+        const profile = createMockProfile({ programId: 'prog-sis', program: 'Ingeniería de Sistemas' } as any);
+        mockHttpClient.get.mockClear();
+        profileRepo.findOne.mockResolvedValue(profile);
+        profileRepo.save.mockImplementation(async (p: any) => p);
+
+        await service.updateProfile('user-uuid-1', { bio: 'solo bio' });
+
+        expect(mockHttpClient.get).not.toHaveBeenCalled();
+        expect(profile.programId).toBe('prog-sis');
+      });
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════
   // SEARCH STUDENTS
   // ═══════════════════════════════════════════════════════════════════
+  describe('searchStudents — alcance por departamento', () => {
+    const qbMock = () => {
+      const qb: any = {};
+      for (const m of ['where', 'andWhere', 'leftJoin', 'leftJoinAndSelect', 'orderBy', 'addOrderBy', 'skip', 'take', 'select', 'distinct']) {
+        qb[m] = jest.fn().mockReturnValue(qb);
+      }
+      qb.getManyAndCount = jest.fn().mockResolvedValue([[], 0]);
+      return qb;
+    };
+
+    it('un admin de DEPARTAMENTO queda restringido a su programa (ignora el programId que pida)', async () => {
+      const qb = qbMock();
+      profileRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.searchStudents({ programId: 'prog-otro' } as any, { all: false, departmentId: 'prog-sis' });
+
+      expect(qb.andWhere).toHaveBeenCalledWith('student.programId = :scopeProgramId', { scopeProgramId: 'prog-sis' });
+      expect(qb.andWhere).not.toHaveBeenCalledWith('student.programId = :programId', expect.anything());
+    });
+
+    it('el superadmin puede filtrar por programa o ver todos', async () => {
+      const qb = qbMock();
+      profileRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.searchStudents({ programId: 'prog-ele' } as any, { all: true });
+      expect(qb.andWhere).toHaveBeenCalledWith('student.programId = :programId', { programId: 'prog-ele' });
+
+      const qb2 = qbMock();
+      profileRepo.createQueryBuilder.mockReturnValue(qb2);
+      await service.searchStudents({} as any, { all: true });
+      expect(qb2.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('programId'), expect.anything());
+    });
+
+    it('sin alcance (estudiante/empresa) se comporta como siempre', async () => {
+      const qb = qbMock();
+      profileRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.searchStudents({} as any, null);
+
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('programId'), expect.anything());
+    });
+  });
+
   describe('searchStudents', () => {
     it('debería retornar resultados paginados', async () => {
       const mockQb = {
@@ -691,6 +831,9 @@ describe('StudentService', () => {
         profile.profileCompleteness = p.profileCompleteness;
         return p;
       });
+
+      // El programa debe existir en el catálogo (regla: no hay estudiantes sin programa).
+      mockHttpClient.get.mockResolvedValue([{ id: 'prog-ing', name: 'Ingeniería', isActive: true }]);
 
       await service.createProfile({ userId: 'new-user', program: 'Ingeniería', semester: 6 });
 

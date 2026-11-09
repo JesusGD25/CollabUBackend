@@ -17,12 +17,16 @@ export class CreateStudentProfileDto {
   @IsUUID('4', { message: 'user_id debe ser un UUID v4 válido' })
   userId: string;
 
+  /**
+   * Programa académico (obligatorio): se envía `programId` (recomendado) o, por compatibilidad,
+   * el nombre exacto en `program`. El servicio valida que sea uno de los programas activos del
+   * catálogo y guarda ambos campos; no existen estudiantes sin programa.
+   */
+  @IsOptional()
   @IsString()
-  @IsNotEmpty({ message: 'El programa es requerido' })
   @MaxLength(150)
-  program: string;
+  program?: string;
 
-  /** Opcional durante la transición: si se envía, debe existir en admin_service.academic_programs. */
   @IsOptional()
   @IsUUID('4', { message: 'programId debe ser un UUID v4 válido' })
   programId?: string;

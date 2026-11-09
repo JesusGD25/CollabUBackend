@@ -116,10 +116,39 @@ if (-Not $Rollback) {
     Write-Host "Generando los archivos de ejemplo..." -ForegroundColor Green
     $GeneratedSql = Join-Path $ScriptDir "seed_file_paths.generated.sql"
 
-    node (Join-Path $ScriptDir "generate-seed-files.mjs") --out $GeneratedSql
-    if ($LASTEXITCODE -ne 0) {
+    # Con Docker, storage-service lee de /app/uploads DENTRO de su contenedor, no
+    # del disco del host. Si esta corriendo, los archivos se generan en una carpeta
+    # temporal, se copian al contenedor con docker cp y la BD apunta a /app/uploads.
+    # Sin esto las descargas del seed fallan con "Archivo fisico no encontrado".
+    $StorageContainer = "collab-u-storage-service"
+    $StorageStatus = docker inspect -f '{{.State.Running}}' $StorageContainer 2>&1
+    $StorageRunning = ($StorageStatus -eq "true")
+    $GenArgs = @("--out", $GeneratedSql)
+    $UploadStage = $null
+    if ($StorageRunning) {
+        $UploadStage = Join-Path ([System.IO.Path]::GetTempPath()) "collabu-seed-uploads"
+        if (Test-Path $UploadStage) { Remove-Item -Recurse -Force $UploadStage }
+        $env:UPLOAD_DIR = $UploadStage
+        $GenArgs += @("--storage-prefix", "/app/uploads")
+        Write-Host "storage-service dockerizado detectado: los archivos se copiaran a /app/uploads del contenedor." -ForegroundColor DarkGray
+    }
+
+    node (Join-Path $ScriptDir "generate-seed-files.mjs") @GenArgs
+    $genExit = $LASTEXITCODE
+    Remove-Item Env:UPLOAD_DIR -ErrorAction SilentlyContinue
+    if ($genExit -ne 0) {
         Write-Host "No se pudieron generar los archivos de ejemplo." -ForegroundColor Red
-        exit $LASTEXITCODE
+        exit $genExit
+    }
+
+    if ($StorageRunning) {
+        docker exec -i $StorageContainer mkdir -p /app/uploads | Out-Null
+        docker cp "$UploadStage/." "${StorageContainer}:/app/uploads/"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "No se pudieron copiar los archivos al contenedor $StorageContainer." -ForegroundColor Red
+            exit $LASTEXITCODE
+        }
+        Remove-Item -Recurse -Force $UploadStage -ErrorAction SilentlyContinue
     }
 
     docker cp $GeneratedSql "${ContainerName}:${RemotePath}"

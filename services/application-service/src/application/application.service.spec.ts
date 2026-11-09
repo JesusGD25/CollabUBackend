@@ -203,13 +203,14 @@ describe('ApplicationService', () => {
         status: 'published',
         companyId: COMPANY_ID,
       });
-      mockHttpClient.post.mockResolvedValue({ overallScore: 85.5 });
+      mockHttpClient.post.mockResolvedValue({ studentId: STUDENT_ID, projectId: PROJECT_ID, score: 85.5 });
       mockHttpClient.patch.mockResolvedValue(undefined);
     });
 
     it('debería crear una postulación exitosamente', async () => {
       const app = makeApplication();
       applicationRepo.findOne
+        .mockResolvedValueOnce(null) // no active project
         .mockResolvedValueOnce(null) // no duplicate
         .mockResolvedValueOnce(app); // findApplicationById
       applicationRepo.create.mockReturnValue(app);
@@ -245,8 +246,17 @@ describe('ApplicationService', () => {
       );
     });
 
-    it('debería lanzar ConflictException si ya existe una postulación', async () => {
-      applicationRepo.findOne.mockResolvedValueOnce(makeApplication());
+    it('debería lanzar BadRequestException si el estudiante ya tiene un proyecto activo asignado', async () => {
+      applicationRepo.findOne.mockResolvedValueOnce(makeApplication({ status: ApplicationStatus.ACCEPTED }));
+      await expect(service.createApplication(STUDENT_ID, dto)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('debería lanzar ConflictException si ya existe una postulación para el mismo proyecto', async () => {
+      applicationRepo.findOne
+        .mockResolvedValueOnce(null) // no active project
+        .mockResolvedValueOnce(makeApplication()); // duplicate for this project
       await expect(service.createApplication(STUDENT_ID, dto)).rejects.toThrow(
         ConflictException,
       );
@@ -256,8 +266,9 @@ describe('ApplicationService', () => {
       mockHttpClient.post.mockRejectedValue(new Error('Service unavailable'));
       const app = makeApplication({ matchScore: null });
       applicationRepo.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(app);
+        .mockResolvedValueOnce(null) // no active project
+        .mockResolvedValueOnce(null) // no duplicate
+        .mockResolvedValueOnce(app); // findApplicationById
       applicationRepo.create.mockReturnValue(app);
       applicationRepo.save.mockResolvedValue(app);
       timelineRepo.create.mockReturnValue({});
@@ -292,6 +303,62 @@ describe('ApplicationService', () => {
         expect.objectContaining({ newStatus: ApplicationStatus.UNDER_REVIEW }),
         'application-service',
       );
+    });
+
+    it('debería permitir cambiar estado de PENDING a ACCEPTED directamente', async () => {
+      const app = makeApplication({ status: ApplicationStatus.PENDING });
+      const updated = makeApplication({ status: ApplicationStatus.ACCEPTED });
+      applicationRepo.findOne
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(updated);
+      applicationRepo.save.mockResolvedValue(updated);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      const result = await service.updateStatus(APP_ID, COMPANY_ID, {
+        status: ApplicationStatus.ACCEPTED,
+      });
+
+      expect(result.status).toBe(ApplicationStatus.ACCEPTED);
+      expect(mockEventPublisher.publish).toHaveBeenCalledWith(
+        'application.company.accepted',
+        expect.objectContaining({ applicationId: APP_ID }),
+        'application-service',
+      );
+    });
+
+    it('debería permitir cambiar estado de UNDER_REVIEW a ACCEPTED directamente', async () => {
+      const app = makeApplication({ status: ApplicationStatus.UNDER_REVIEW });
+      const updated = makeApplication({ status: ApplicationStatus.ACCEPTED });
+      applicationRepo.findOne
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(updated);
+      applicationRepo.save.mockResolvedValue(updated);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      const result = await service.updateStatus(APP_ID, COMPANY_ID, {
+        status: ApplicationStatus.ACCEPTED,
+      });
+
+      expect(result.status).toBe(ApplicationStatus.ACCEPTED);
+    });
+
+    it('debería permitir cambiar estado de SHORTLISTED a ACCEPTED directamente', async () => {
+      const app = makeApplication({ status: ApplicationStatus.SHORTLISTED });
+      const updated = makeApplication({ status: ApplicationStatus.ACCEPTED });
+      applicationRepo.findOne
+        .mockResolvedValueOnce(app)
+        .mockResolvedValueOnce(updated);
+      applicationRepo.save.mockResolvedValue(updated);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      const result = await service.updateStatus(APP_ID, COMPANY_ID, {
+        status: ApplicationStatus.ACCEPTED,
+      });
+
+      expect(result.status).toBe(ApplicationStatus.ACCEPTED);
     });
 
     it('debería lanzar BadRequestException por transición inválida', async () => {
@@ -1001,6 +1068,70 @@ describe('ApplicationService', () => {
         expect.objectContaining({ applicationId: APP_ID, forceEmail: true }),
         'application-service',
       );
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ALCANCE POR DEPARTAMENTO
+  // ═══════════════════════════════════════════════════════════════════
+  describe('alcance por departamento', () => {
+    it('postular guarda el programId del estudiante (snapshot de su departamento)', async () => {
+      mockHttpClient.get.mockImplementation(async (_svc: string, url: string) =>
+        url.includes('/exists')
+          ? { exists: true, status: 'published', companyId: COMPANY_ID }
+          : { programId: 'dept-sis' },
+      );
+      mockHttpClient.post.mockResolvedValue({ score: 70 });
+      const app = makeApplication();
+      applicationRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null).mockResolvedValueOnce(app);
+      applicationRepo.create.mockReturnValue(app);
+      applicationRepo.save.mockResolvedValue(app);
+      timelineRepo.create.mockReturnValue({});
+      timelineRepo.save.mockResolvedValue({});
+
+      await service.createApplication(STUDENT_ID, { projectId: PROJECT_ID, coverLetter: 'x'.repeat(60) });
+
+      expect(applicationRepo.create).toHaveBeenCalledWith(expect.objectContaining({ programId: 'dept-sis' }));
+    });
+
+    it('authorize: admin de OTRO departamento recibe 404 y no se evalúa el permiso', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication({ programId: 'dept-ele' } as any));
+
+      await expect(
+        service.authorize('app-1', { id: 'a1', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' }, 'view_documents' as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockProjectAccess.assertPermission).not.toHaveBeenCalled();
+    });
+
+    it('authorize: admin del departamento correcto y superadmin pasan', async () => {
+      applicationRepo.findOne.mockResolvedValue(makeApplication({ programId: 'dept-sis' } as any));
+      mockProjectAccess.assertPermission.mockResolvedValue({ contextRole: 'admin' });
+
+      await expect(
+        service.authorize('app-1', { id: 'a1', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' }, 'view_documents' as any),
+      ).resolves.toBeDefined();
+      await expect(
+        service.authorize('app-1', { id: 'f1', role: 'admin', adminLevel: 'super' }, 'view_documents' as any),
+      ).resolves.toBeDefined();
+    });
+
+    it('cola pendiente: el admin de departamento filtra por su programId', async () => {
+      applicationRepo.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.getAdminPendingApplications({}, { all: false, departmentId: 'dept-sis' });
+
+      expect(applicationRepo.findAndCount).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ programId: 'dept-sis' }) }),
+      );
+    });
+
+    it('cola pendiente: el superadmin no filtra por programa', async () => {
+      applicationRepo.findAndCount.mockResolvedValue([[], 0]);
+
+      await service.getAdminPendingApplications({}, { all: true });
+
+      const where = applicationRepo.findAndCount.mock.calls[0][0].where;
+      expect(where).not.toHaveProperty('programId');
     });
   });
 });

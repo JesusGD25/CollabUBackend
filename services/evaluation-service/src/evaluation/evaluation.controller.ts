@@ -20,7 +20,7 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole, assertSuperAdmin } from '@collab-u/shared';
 
 import { EvaluationService } from './evaluation.service';
 import {
@@ -35,8 +35,6 @@ import {
 import { EvaluationType } from './entities/enums';
 
 @ApiTags('Evaluations')
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('api/v1/evaluations')
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
@@ -46,7 +44,9 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear una evaluación pendiente' })
   @ApiResponse({ status: 201, description: 'Evaluación creada' })
@@ -56,21 +56,24 @@ export class EvaluationController {
   }
 
   @Get('my/as-evaluator')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver mis evaluaciones como evaluador' })
   getMyEvaluations(@CurrentUser() user: any, @Query() query: EvaluationQueryDto) {
     return this.evaluationService.findByEvaluator(user.id, query);
   }
 
   @Get('my/as-evaluated')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver evaluaciones recibidas sobre mí' })
   getEvaluationsAboutMe(@CurrentUser() user: any, @Query() query: EvaluationQueryDto) {
     return this.evaluationService.findByEvaluated(user.id, query);
   }
 
   @Get('criteria')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver criterios de evaluación activos' })
   @ApiQuery({ name: 'evaluationType', required: false, enum: EvaluationType })
   getCriteria(@Query('evaluationType') evaluationType?: EvaluationType) {
@@ -78,15 +81,20 @@ export class EvaluationController {
   }
 
   @Post('criteria')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear un criterio de evaluación (admin)' })
-  createCriterion(@Body() dto: CreateCriterionDto) {
+  createCriterion(@CurrentUser() user: any, @Body() dto: CreateCriterionDto) {
+    assertSuperAdmin(user);
     return this.evaluationService.createCriterion(dto);
   }
 
   @Get('templates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver plantillas de evaluación' })
   @ApiQuery({ name: 'evaluationType', required: false, enum: EvaluationType })
   getTemplates(@Query('evaluationType') evaluationType?: EvaluationType) {
@@ -94,31 +102,59 @@ export class EvaluationController {
   }
 
   @Get('aggregate/:userId')
-  @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
   @ApiOperation({ summary: 'Ver puntuaciones agregadas de un usuario evaluado' })
   @ApiParam({ name: 'userId', type: 'string' })
   getAggregateScores(@Param('userId', ParseUUIDPipe) userId: string) {
     return this.evaluationService.getAggregateScores(userId);
   }
 
+  @Get('company/:companyId')
+  @ApiOperation({ summary: 'Ver evaluaciones públicas de una empresa' })
+  @ApiParam({ name: 'companyId', type: 'string' })
+  getPublicCompanyEvaluations(
+    @Param('companyId', ParseUUIDPipe) companyId: string,
+    @Query() query: EvaluationQueryDto,
+  ) {
+    return this.evaluationService.getPublicEvaluations(companyId, 'company', query);
+  }
+
+  @Get('student/:studentId')
+  @ApiOperation({ summary: 'Ver evaluaciones públicas de un estudiante' })
+  @ApiParam({ name: 'studentId', type: 'string' })
+  getPublicStudentEvaluations(
+    @Param('studentId', ParseUUIDPipe) studentId: string,
+    @Query() query: EvaluationQueryDto,
+  ) {
+    return this.evaluationService.getPublicEvaluations(studentId, 'student', query);
+  }
+
   @Get('application/:applicationId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver evaluaciones de una postulación' })
   @ApiParam({ name: 'applicationId', type: 'string' })
-  getByApplication(@Param('applicationId', ParseUUIDPipe) applicationId: string) {
-    return this.evaluationService.findByApplication(applicationId);
+  getByApplication(
+    @Param('applicationId', ParseUUIDPipe) applicationId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.evaluationService.findByApplication(applicationId, { id: user.id, role: user.role });
   }
 
   @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Ver detalle de una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.evaluationService.findById(id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: any) {
+    return this.evaluationService.findById(id, { id: user.id, role: user.role });
   }
 
   @Post(':id/submit')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.STUDENT, UserRole.COMPANY, UserRole.FACULTY, UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Completar y enviar una evaluación' })
   @ApiParam({ name: 'id', type: 'string' })
@@ -138,30 +174,40 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Post('templates')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Crear plantilla de evaluación (admin)' })
   createTemplate(@Body() dto: CreateTemplateDto, @CurrentUser() user: any) {
+    assertSuperAdmin(user);
     return this.evaluationService.createTemplate(dto, user.id);
   }
 
   @Patch('templates/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Actualizar plantilla (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
   updateTemplate(
+    @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateTemplateDto,
   ) {
+    assertSuperAdmin(user);
     return this.evaluationService.updateTemplate(id, dto);
   }
 
   @Delete('templates/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar plantilla (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
-  deleteTemplate(@Param('id', ParseUUIDPipe) id: string) {
+  deleteTemplate(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    assertSuperAdmin(user);
     return this.evaluationService.deleteTemplate(id);
   }
 
@@ -170,22 +216,29 @@ export class EvaluationController {
   // ──────────────────────────────────────────────────────────────────
 
   @Patch('criteria/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Actualizar criterio (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
   updateCriterion(
+    @CurrentUser() user: any,
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCriterionDto,
   ) {
+    assertSuperAdmin(user);
     return this.evaluationService.updateCriterion(id, dto);
   }
 
   @Delete('criteria/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar criterio (admin)' })
   @ApiParam({ name: 'id', type: 'string' })
-  deleteCriterion(@Param('id', ParseUUIDPipe) id: string) {
+  deleteCriterion(@CurrentUser() user: any, @Param('id', ParseUUIDPipe) id: string) {
+    assertSuperAdmin(user);
     return this.evaluationService.deleteCriterion(id);
   }
 }

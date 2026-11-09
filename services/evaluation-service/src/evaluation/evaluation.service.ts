@@ -431,8 +431,42 @@ export class EvaluationService implements OnModuleInit {
     );
 
     updated.ratings = await this.ratingRepo.find({ where: { evaluationId: id } });
+    await this.attachCriteria([updated]);
     await this.enrichEvaluations([updated]);
+    await this.syncProfileRating(updated);
     return updated;
+  }
+
+  /**
+   * Refleja en el perfil del evaluado (estudiante o empresa) su calificación promedio.
+   * Las evaluaciones se guardan en 0-100; los perfiles muestran 0-5, así que se divide entre 20.
+   * Es "best effort": si el otro servicio no responde, la evaluación ya quedó guardada.
+   */
+  private async syncProfileRating(evaluation: Evaluation): Promise<void> {
+    try {
+      const aggregate = await this.getAggregateScores(evaluation.evaluatedId);
+      if (aggregate.averageScore == null) return;
+      const rating = Math.round((aggregate.averageScore / 20) * 100) / 100;
+
+      if (
+        evaluation.evaluationType === EvaluationType.COMPANY_EVALUATES_STUDENT ||
+        evaluation.evaluationType === EvaluationType.SUPERVISOR_EVALUATES_STUDENT
+      ) {
+        await this.httpClient.post('student', '/internal/students/update-rating', {
+          studentUserId: evaluation.evaluatedId,
+          averageRating: rating,
+          totalRatings: aggregate.completedCount,
+        });
+      } else if (evaluation.evaluationType === EvaluationType.STUDENT_EVALUATES_COMPANY) {
+        await this.httpClient.post('company', '/internal/companies/update-rating', {
+          companyUserId: evaluation.evaluatedId,
+          rating,
+          totalReviews: aggregate.completedCount,
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`No se pudo actualizar el rating del perfil evaluado: ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -448,17 +482,26 @@ export class EvaluationService implements OnModuleInit {
     const projectIds = [...new Set(evaluations.map((e) => e.projectId))];
     const userIds = [...new Set(evaluations.flatMap((e) => [e.evaluatorId, e.evaluatedId]))];
 
+    let failed = false;
     const [projects, users] = await Promise.all([
       this.httpClient
         .post<{ id: string; title: string }[]>('project', '/internal/projects/batch-basic', { projectIds })
-        .catch(() => [] as { id: string; title: string }[]),
+        .catch((err) => {
+          failed = true;
+          this.logger.warn(`No se pudo resolver títulos de proyecto: ${err?.message}`);
+          return [] as { id: string; title: string }[];
+        }),
       this.httpClient
         .post<{ userId: string; firstName: string | null; lastName: string | null }[]>(
           'user',
           '/internal/users/batch-basic',
           { userIds },
         )
-        .catch(() => [] as { userId: string; firstName: string | null; lastName: string | null }[]),
+        .catch((err) => {
+          failed = true;
+          this.logger.warn(`No se pudo resolver nombres de usuario: ${err?.message}`);
+          return [] as { userId: string; firstName: string | null; lastName: string | null }[];
+        }),
     ]);
 
     const projectMap = new Map(projects.map((p) => [p.id, p.title]));
@@ -470,11 +513,56 @@ export class EvaluationService implements OnModuleInit {
       e.projectTitle = projectMap.get(e.projectId) ?? null;
       e.evaluatorName = nameMap.get(e.evaluatorId) ?? null;
       e.evaluatedName = nameMap.get(e.evaluatedId) ?? null;
+      e.enrichmentFailed = failed;
     }
     return evaluations;
   }
 
-  async findById(id: string): Promise<Evaluation> {
+  /**
+   * Adjunta a cada calificación el criterio que evalúa (nombre, categoría, peso).
+   * `EvaluationRating` no tiene relación TypeORM (ver su comentario), así que sin esto
+   * el detalle de una evaluación completada no podía mostrar qué criterio era cada barra.
+   */
+  private async attachCriteria(evaluations: Evaluation[]): Promise<void> {
+    const ids = [...new Set(evaluations.flatMap((e) => (e.ratings ?? []).map((r) => r.criterionId)))];
+    if (ids.length === 0) return;
+
+    const criteria = await this.criteriaRepo.find({ where: { id: In(ids) } });
+    const byId = new Map(criteria.map((c) => [c.id, c]));
+
+    for (const e of evaluations) {
+      for (const r of e.ratings ?? []) {
+        const c = byId.get(r.criterionId);
+        r.criterion = c
+          ? {
+              id: c.id,
+              name: c.name,
+              description: c.description ?? null,
+              category: c.category,
+              weight: Number(c.weight),
+              ratingScale: c.ratingScale,
+            }
+          : null;
+      }
+    }
+  }
+
+  /**
+   * Una evaluación anónima no debe revelar quién la hizo a quien la recibe (ni a terceros
+   * que no sean el propio evaluador o un admin). Se ocultan `evaluatorId` y `evaluatorName`.
+   */
+  private maskAnonymity(evaluations: Evaluation[], viewer?: { id: string; role?: string }): Evaluation[] {
+    for (const e of evaluations) {
+      if (!e.isAnonymous) continue;
+      const canSeeEvaluator = viewer && (viewer.id === e.evaluatorId || viewer.role === 'admin');
+      if (canSeeEvaluator) continue;
+      e.evaluatorName = null;
+      (e as { evaluatorId: string | null }).evaluatorId = null;
+    }
+    return evaluations;
+  }
+
+  async findById(id: string, viewer?: { id: string; role?: string }): Promise<Evaluation> {
     const evaluation = await this.evaluationRepo.findOne({ where: { id } });
 
     if (!evaluation) {
@@ -482,11 +570,13 @@ export class EvaluationService implements OnModuleInit {
     }
 
     evaluation.ratings = await this.ratingRepo.find({ where: { evaluationId: id } });
+    await this.attachCriteria([evaluation]);
     await this.enrichEvaluations([evaluation]);
+    this.maskAnonymity([evaluation], viewer);
     return evaluation;
   }
 
-  async findByApplication(applicationId: string): Promise<Evaluation[]> {
+  async findByApplication(applicationId: string, viewer?: { id: string; role?: string }): Promise<Evaluation[]> {
     const evaluations = await this.evaluationRepo.find({
       where: { applicationId },
       order: { createdAt: 'ASC' },
@@ -502,8 +592,10 @@ export class EvaluationService implements OnModuleInit {
       byEvaluation.get(r.evaluationId)!.push(r);
     }
     for (const e of evaluations) e.ratings = byEvaluation.get(e.id) ?? [];
+    await this.attachCriteria(evaluations);
     await this.enrichEvaluations(evaluations);
-    return evaluations;
+    // El endpoint interno (sin viewer) conserva todos los datos; el público enmascara.
+    return viewer ? this.maskAnonymity(evaluations, viewer) : evaluations;
   }
 
   async findByEvaluator(
@@ -516,7 +608,7 @@ export class EvaluationService implements OnModuleInit {
 
     const where: FindOptionsWhere<Evaluation> = { evaluatorId };
     if (query.evaluationType) where.evaluationType = query.evaluationType;
-    if (query.status) where.status = query.status;
+    if (query.status?.length) where.status = In(query.status);
     if (query.projectId) where.projectId = query.projectId;
 
     const [data, total] = await this.evaluationRepo.findAndCount({
@@ -540,7 +632,7 @@ export class EvaluationService implements OnModuleInit {
 
     const where: FindOptionsWhere<Evaluation> = { evaluatedId };
     if (query.evaluationType) where.evaluationType = query.evaluationType;
-    if (query.status) where.status = query.status;
+    if (query.status?.length) where.status = In(query.status);
     if (query.projectId) where.projectId = query.projectId;
 
     const [data, total] = await this.evaluationRepo.findAndCount({
@@ -551,7 +643,127 @@ export class EvaluationService implements OnModuleInit {
     });
 
     await this.enrichEvaluations(data);
+    // Quien recibe la evaluación nunca ve al evaluador si fue anónima.
+    this.maskAnonymity(data, { id: evaluatedId });
     return { data, total, page, limit };
+  }
+
+  async getPublicEvaluations(
+    targetId: string,
+    targetType: 'company' | 'student',
+    query: EvaluationQueryDto = {},
+  ): Promise<{
+    evaluations: Evaluation[];
+    stats: {
+      averageRating: number | null;
+      totalReviews: number;
+      distribution: Record<number, number>;
+    };
+    pagination: {
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    };
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.max(1, query.limit ?? 10);
+    const skip = (page - 1) * limit;
+
+    const candidateIds = new Set<string>([targetId]);
+
+    if (targetType === 'company') {
+      try {
+        const comp = await this.httpClient
+          .get<{ userId?: string; companyId?: string }>(
+            'company',
+            `/internal/companies/${targetId}/basic-info`,
+          )
+          .catch(() => null);
+        if (comp?.userId) candidateIds.add(comp.userId);
+        if (comp?.companyId) candidateIds.add(comp.companyId);
+      } catch {
+        // best effort
+      }
+    } else {
+      try {
+        const stud = await this.httpClient
+          .get<{ userId?: string; studentId?: string }>(
+            'student',
+            `/internal/students/${targetId}/basic-info`,
+          )
+          .catch(() => null);
+        if (stud?.userId) candidateIds.add(stud.userId);
+        if (stud?.studentId) candidateIds.add(stud.studentId);
+      } catch {
+        // best effort
+      }
+    }
+
+    const types =
+      targetType === 'company'
+        ? [EvaluationType.STUDENT_EVALUATES_COMPANY]
+        : [
+            EvaluationType.COMPANY_EVALUATES_STUDENT,
+            EvaluationType.SUPERVISOR_EVALUATES_STUDENT,
+          ];
+
+    const allCompleted = await this.evaluationRepo.find({
+      where: [...candidateIds].map((id) => ({
+        evaluatedId: id,
+        status: EvaluationStatus.COMPLETED,
+        evaluationType: In(types),
+      })),
+      order: { completedAt: 'DESC', createdAt: 'DESC' },
+    });
+
+    const totalReviews = allCompleted.length;
+    const withScore = allCompleted.filter((e) => e.overallScore !== null);
+    const averageScore =
+      withScore.length > 0
+        ? withScore.reduce((sum, e) => sum + Number(e.overallScore), 0) / withScore.length
+        : null;
+    const averageRating =
+      averageScore !== null ? Math.round((averageScore / 20) * 10) / 10 : null;
+
+    const distribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const e of withScore) {
+      const stars = Math.min(5, Math.max(1, Math.round(Number(e.overallScore) / 20)));
+      distribution[stars] = (distribution[stars] || 0) + 1;
+    }
+
+    const paged = allCompleted.slice(skip, skip + limit);
+
+    if (paged.length > 0) {
+      const pagedIds = paged.map((e) => e.id);
+      const ratings = await this.ratingRepo.find({
+        where: { evaluationId: In(pagedIds) },
+      });
+      const byEvaluation = new Map<string, EvaluationRating[]>();
+      for (const r of ratings) {
+        if (!byEvaluation.has(r.evaluationId)) byEvaluation.set(r.evaluationId, []);
+        byEvaluation.get(r.evaluationId)!.push(r);
+      }
+      for (const e of paged) e.ratings = byEvaluation.get(e.id) ?? [];
+      await this.attachCriteria(paged);
+      await this.enrichEvaluations(paged);
+      this.maskAnonymity(paged);
+    }
+
+    return {
+      evaluations: paged,
+      stats: {
+        averageRating,
+        totalReviews,
+        distribution,
+      },
+      pagination: {
+        total: totalReviews,
+        page,
+        limit,
+        totalPages: Math.ceil(totalReviews / limit) || 1,
+      },
+    };
   }
 
   async getAggregateScores(evaluatedId: string): Promise<{
@@ -586,6 +798,88 @@ export class EvaluationService implements OnModuleInit {
     }
 
     return { averageScore, completedCount: completed.length, byType };
+  }
+
+  async getAnalyticsStats(params: {
+    companyId?: string;
+    studentId?: string;
+    projectId?: string;
+    from?: string;
+    to?: string;
+  }): Promise<{
+    avgOverallScore: number | null;
+    count: number;
+    byEvaluationType: Record<string, { avg: number | null; count: number }>;
+  }> {
+    const { companyId, studentId, projectId, from, to } = params;
+
+    // `Evaluation` no tiene columna `companyId` local (solo `applicationId`/
+    // `projectId`/`evaluatorId`/`evaluatedId`, según auditoría previa). Resolver
+    // companyId requeriría una consulta cruzada a company/project-service, fuera
+    // de alcance aquí. Se acepta el parámetro por compatibilidad de la firma pero
+    // no se usa para filtrar.
+    void companyId;
+
+    const qb = this.evaluationRepo
+      .createQueryBuilder('eval')
+      .where('eval.status = :status', { status: EvaluationStatus.COMPLETED });
+
+    if (projectId) {
+      qb.andWhere('eval.project_id = :projectId', { projectId });
+    }
+
+    if (studentId) {
+      qb.andWhere(
+        `(
+          (eval.evaluation_type IN (:...studentAsEvaluated) AND eval.evaluated_id = :studentId)
+          OR
+          (eval.evaluation_type IN (:...studentAsEvaluator) AND eval.evaluator_id = :studentId)
+        )`,
+        {
+          studentAsEvaluated: [
+            EvaluationType.COMPANY_EVALUATES_STUDENT,
+            EvaluationType.SUPERVISOR_EVALUATES_STUDENT,
+          ],
+          studentAsEvaluator: [
+            EvaluationType.STUDENT_EVALUATES_COMPANY,
+            EvaluationType.STUDENT_EVALUATES_SUPERVISOR,
+          ],
+          studentId,
+        },
+      );
+    }
+
+    if (from) {
+      qb.andWhere('eval.completed_at >= :from', { from: new Date(from) });
+    }
+    if (to) {
+      qb.andWhere('eval.completed_at <= :to', { to: new Date(to) });
+    }
+
+    const evaluations = await qb.getMany();
+
+    const withScore = evaluations.filter((e) => e.overallScore !== null);
+    const avgOverallScore =
+      withScore.length > 0
+        ? withScore.reduce((sum, e) => sum + Number(e.overallScore), 0) / withScore.length
+        : null;
+
+    const byEvaluationType: Record<string, { avg: number | null; count: number }> = {};
+    const types = Object.values(EvaluationType) as EvaluationType[];
+    for (const type of types) {
+      const typeEvals = evaluations.filter((e) => e.evaluationType === type);
+      const typeWithScore = typeEvals.filter((e) => e.overallScore !== null);
+      byEvaluationType[type] = {
+        avg:
+          typeWithScore.length > 0
+            ? typeWithScore.reduce((sum, e) => sum + Number(e.overallScore), 0) /
+              typeWithScore.length
+            : null,
+        count: typeEvals.length,
+      };
+    }
+
+    return { avgOverallScore, count: evaluations.length, byEvaluationType };
   }
 
   // ──────────────────────────────────────────────────────────────────

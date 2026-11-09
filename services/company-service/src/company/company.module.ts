@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { HttpModule, HttpService } from '@nestjs/axios';
+import { MicroserviceHttpClient } from '@collab-u/shared';
 
 import { CompanyProfile } from './entities/company-profile.entity';
 import { CompanyLocation } from './entities/company-location.entity';
@@ -18,9 +20,17 @@ import { CompanyInternalController } from './company-internal.controller';
       CompanyContact,
       BusinessArea,
     ]),
+    HttpModule,
   ],
   controllers: [CompanyController, CompanyInternalController],
-  providers: [CompanyService],
+  providers: [
+    CompanyService,
+    {
+      provide: MicroserviceHttpClient,
+      useFactory: (httpService: HttpService) => new MicroserviceHttpClient(httpService as any),
+      inject: [HttpService],
+    },
+  ],
   exports: [CompanyService],
 })
 export class CompanyModule {}

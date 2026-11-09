@@ -36,6 +36,11 @@ export class GatewayAuthMiddleware implements NestMiddleware {
       return next();
     }
 
+    // El alcance de administrador (nivel/departamento) SOLO lo decide el gateway a partir del token:
+    // cualquier valor que mande el cliente se descarta antes de evaluar nada.
+    delete req.headers['x-user-admin-level'];
+    delete req.headers['x-user-department-id'];
+
     const isPublicRoute = this.publicRoutes.some((route) => req.path.startsWith(route)) || (req.method === 'GET' && this.publicGetRoutes.some((regex) => regex.test(req.path)));
 
     const authHeader = req.headers.authorization;
@@ -62,6 +67,8 @@ export class GatewayAuthMiddleware implements NestMiddleware {
       req.headers['x-user-id'] = response.data.id;
       req.headers['x-user-email'] = response.data.email;
       req.headers['x-user-role'] = response.data.role;
+      if (response.data.adminLevel) req.headers['x-user-admin-level'] = response.data.adminLevel;
+      if (response.data.departmentId) req.headers['x-user-department-id'] = response.data.departmentId;
 
       next();
     } catch (error: any) {

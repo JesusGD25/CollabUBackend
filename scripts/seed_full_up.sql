@@ -1055,17 +1055,18 @@ ON CONFLICT (id) DO NOTHING;
 \c evaluation_db;
 SET client_encoding = 'UTF8';
 
+-- overall_score en escala 0-100 (la misma que valida SubmitEvaluationDto y que la UI divide entre 20).
 INSERT INTO "evaluations" (id, application_id, project_id, evaluator_id, evaluated_id, evaluation_type, status,
   overall_score, overall_comment, strengths, areas_for_improvement, completed_at) VALUES
 ('723fb2e0-fe7a-4556-b760-915728b9db96','59cbc405-1c87-4652-a111-9b1f59131def','fa6cd72e-83ce-4404-a8bc-a0e294c15f1e',
   '928b7648-201a-4ab8-8bbb-638a2e4f5490','978be3f3-1bef-4b92-aa20-eb62f64402e6','company_evaluates_student','completed',
-  4.8,'Excelente desempeño, entregó todos los hitos a tiempo y con alta calidad.','Autonomía, comunicación, calidad técnica.','Podría reforzar la documentación técnica.','2026-08-01 10:00:00-05'),
+  96,'Excelente desempeño, entregó todos los hitos a tiempo y con alta calidad.','Autonomía, comunicación, calidad técnica.','Podría reforzar la documentación técnica.','2026-08-01 10:00:00-05'),
 ('09fd03d9-d160-465f-807d-4a9d2ff11905','59cbc405-1c87-4652-a111-9b1f59131def','fa6cd72e-83ce-4404-a8bc-a0e294c15f1e',
   '978be3f3-1bef-4b92-aa20-eb62f64402e6','928b7648-201a-4ab8-8bbb-638a2e4f5490','student_evaluates_company','completed',
-  4.5,'Buen ambiente de trabajo y acompañamiento constante del equipo.','Acompañamiento, herramientas disponibles.','Podrían mejorar los tiempos de retroalimentación.','2026-08-02 10:00:00-05'),
+  90,'Buen ambiente de trabajo y acompañamiento constante del equipo.','Acompañamiento, herramientas disponibles.','Podrían mejorar los tiempos de retroalimentación.','2026-08-02 10:00:00-05'),
 ('e84b7571-17d4-4ebf-9305-28a0465e3bb0','59cbc405-1c87-4652-a111-9b1f59131def','fa6cd72e-83ce-4404-a8bc-a0e294c15f1e',
   '978be3f3-1bef-4b92-aa20-eb62f64402e6','47a3161d-169f-4224-9fb3-fcf74c9796d2','student_evaluates_supervisor','completed',
-  4.9,'La asesora estuvo disponible durante todo el proceso y sus observaciones fueron muy valiosas.','Disponibilidad, retroalimentación oportuna.',NULL,'2026-08-03 10:00:00-05')
+  98,'La asesora estuvo disponible durante todo el proceso y sus observaciones fueron muy valiosas.','Disponibilidad, retroalimentación oportuna.',NULL,'2026-08-03 10:00:00-05')
 ON CONFLICT (id) DO NOTHING;
 
 -- =========================================================================
@@ -1403,6 +1404,16 @@ SET client_encoding = 'UTF8';
 INSERT INTO "supervisor_assignments" (id, supervisor_id, student_id, project_id, application_id, period_id, assigned_by, role, start_date, end_date, status, decline_reason, accepted_at, notes) VALUES
 ('81ad0930-0cac-4a45-a9f5-53d3f448583c','fecca71e-30aa-464b-9272-8a8b437f9a72','d955c8da-018e-48b6-9698-a18ae8f78e93','a3cf1251-2362-4217-a7cf-27c05cd43296','bef45d2d-16c4-4c9e-87bf-5f954335f071','befd9543-14a2-42fb-b9b3-ccca14db6a5f','951e948d-e811-4403-bf33-a0ced78a17b1','asesor','2026-03-01',NULL,'accepted',NULL,'2026-03-02 10:00:00-05','Asesoría E22 — probar emails al finalizar.')
 ON CONFLICT (student_id, project_id, role, supervisor_id) DO NOTHING;
+
+-- created_at no se pasa en los INSERT de arriba (no está en la lista de columnas), así que cae en
+-- el default de @CreateDateColumn (NOW() al momento de sembrar) — muy posterior a los accepted_at
+-- históricos que sí se fijan explícitamente. Eso produce duraciones negativas ("aceptado antes de
+-- creado") en getAssignmentStats().avgAcceptanceHours. Se corrige aquí en vez de reescribir cada
+-- tupla del VALUES: created_at pasa a 1 día antes de accepted_at (o de start_date si no hay
+-- accepted_at), manteniendo el orden causal sin inventar una fecha para accepted_at.
+UPDATE "supervisor_assignments"
+SET created_at = COALESCE(accepted_at, start_date::timestamptz) - interval '1 day'
+WHERE created_at > COALESCE(accepted_at, start_date::timestamptz);
 
 \c application_db;
 SET client_encoding = 'UTF8';

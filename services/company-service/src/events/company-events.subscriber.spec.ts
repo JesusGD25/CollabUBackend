@@ -76,7 +76,8 @@ describe('CompanyEventsSubscriber', () => {
       expect(companyService.createProfile).toHaveBeenCalledWith({
         userId: 'user-uuid-1',
         companyName: 'Empresa pendiente de configurar',
-      });
+        programIds: [],
+      }, true);
     });
 
     it('debería ignorar si el rol no es company', async () => {

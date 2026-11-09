@@ -30,6 +30,7 @@ const mockEvaluationService = {
   createCriterion: jest.fn(),
   getTemplates: jest.fn(),
   createTemplate: jest.fn(),
+  getPublicEvaluations: jest.fn(),
 };
 
 // ──────────────────────────────────────────────────────────────────
@@ -141,7 +142,7 @@ describe('EvaluationController', () => {
       const expected = { id: 'c1', ...dto };
       mockEvaluationService.createCriterion.mockResolvedValue(expected);
 
-      const result = await controller.createCriterion(dto);
+      const result = await controller.createCriterion({ id: 'a', role: 'admin', adminLevel: 'super' }, dto);
 
       expect(result).toBe(expected);
       expect(mockEvaluationService.createCriterion).toHaveBeenCalledWith(dto);
@@ -186,10 +187,13 @@ describe('EvaluationController', () => {
       const expected = [{ id: EVAL_ID }];
       mockEvaluationService.findByApplication.mockResolvedValue(expected);
 
-      const result = await controller.getByApplication(APPLICATION_ID);
+      const result = await controller.getByApplication(APPLICATION_ID, mockUser);
 
       expect(result).toBe(expected);
-      expect(mockEvaluationService.findByApplication).toHaveBeenCalledWith(APPLICATION_ID);
+      expect(mockEvaluationService.findByApplication).toHaveBeenCalledWith(APPLICATION_ID, {
+        id: EVALUATOR_ID,
+        role: undefined,
+      });
     });
   });
 
@@ -201,10 +205,13 @@ describe('EvaluationController', () => {
       const expected = { id: EVAL_ID };
       mockEvaluationService.findById.mockResolvedValue(expected);
 
-      const result = await controller.findOne(EVAL_ID);
+      const result = await controller.findOne(EVAL_ID, mockUser);
 
       expect(result).toBe(expected);
-      expect(mockEvaluationService.findById).toHaveBeenCalledWith(EVAL_ID);
+      expect(mockEvaluationService.findById).toHaveBeenCalledWith(EVAL_ID, {
+        id: EVALUATOR_ID,
+        role: undefined,
+      });
     });
   });
 
@@ -227,6 +234,42 @@ describe('EvaluationController', () => {
         EVALUATOR_ID,
         dto,
       );
+    });
+  });
+
+  describe('public evaluations', () => {
+    it('debería delegar getPublicCompanyEvaluations a evaluationService.getPublicEvaluations con company', async () => {
+      const expected = { evaluations: [], stats: { averageRating: 4.8, totalReviews: 5, distribution: {} }, pagination: {} };
+      mockEvaluationService.getPublicEvaluations.mockResolvedValue(expected);
+
+      const query: EvaluationQueryDto = { page: 1, limit: 10 };
+      const result = await controller.getPublicCompanyEvaluations(EVALUATED_ID, query);
+
+      expect(result).toBe(expected);
+      expect(mockEvaluationService.getPublicEvaluations).toHaveBeenCalledWith(EVALUATED_ID, 'company', query);
+    });
+
+    it('debería delegar getPublicStudentEvaluations a evaluationService.getPublicEvaluations con student', async () => {
+      const expected = { evaluations: [], stats: { averageRating: 5.0, totalReviews: 2, distribution: {} }, pagination: {} };
+      mockEvaluationService.getPublicEvaluations.mockResolvedValue(expected);
+
+      const query: EvaluationQueryDto = { page: 1, limit: 10 };
+      const result = await controller.getPublicStudentEvaluations(EVALUATED_ID, query);
+
+      expect(result).toBe(expected);
+      expect(mockEvaluationService.getPublicEvaluations).toHaveBeenCalledWith(EVALUATED_ID, 'student', query);
+    });
+  });
+
+  describe('catálogo global (solo Facultad)', () => {
+    const DEPT = { id: 'a', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' };
+    it('un admin de departamento no puede crear/editar/eliminar criterios ni plantillas', () => {
+      expect(() => controller.createCriterion(DEPT, {} as any)).toThrow();
+      expect(() => controller.updateCriterion(DEPT, 'c', {} as any)).toThrow();
+      expect(() => controller.deleteCriterion(DEPT, 'c')).toThrow();
+      expect(() => controller.createTemplate({} as any, DEPT)).toThrow();
+      expect(() => controller.updateTemplate(DEPT, 't', {} as any)).toThrow();
+      expect(() => controller.deleteTemplate(DEPT, 't')).toThrow();
     });
   });
 });

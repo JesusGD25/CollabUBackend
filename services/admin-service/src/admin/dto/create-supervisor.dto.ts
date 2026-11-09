@@ -2,6 +2,7 @@ import {
   IsString,
   IsOptional,
   IsEnum,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -23,6 +24,11 @@ export class CreateSupervisorDto {
   @IsString()
   @MaxLength(200)
   department?: string;
+
+  @ApiPropertyOptional({ description: 'Departamento (programa académico) del docente' })
+  @IsOptional()
+  @IsUUID()
+  programId?: string;
 
   @ApiPropertyOptional({ enum: SupervisorRole })
   @IsOptional()

@@ -290,7 +290,7 @@ describe('StorageService', () => {
       const file = createMockStoredFile({
         ownerId: 'other-user',
         isPublic: false,
-        category: FileCategory.AVATAR,
+        category: FileCategory.CHAT_ATTACHMENT,
       });
       fileRepo.findOne.mockResolvedValue(file);
 
@@ -298,6 +298,15 @@ describe('StorageService', () => {
         service.getFileInfo('file-uuid-1', 'user-uuid-1'),
       ).rejects.toThrow(ForbiddenException);
     });
+
+    it.each([FileCategory.AVATAR, FileCategory.COMPANY_LOGO, FileCategory.CV, FileCategory.PORTFOLIO])(
+      'permite leer los metadatos de un archivo de categoría %s aunque no sea propio (perfil visible)',
+      async (category) => {
+        fileRepo.findOne.mockResolvedValue(createMockStoredFile({ ownerId: 'other-user', isPublic: false, category }));
+
+        await expect(service.getFileInfo('file-uuid-1', 'user-uuid-1')).resolves.toBeDefined();
+      },
+    );
 
     it('debería aplicar el mismo criterio que la descarga: si puede abrirlo, ve sus metadatos', async () => {
       const file = createMockStoredFile({
@@ -507,7 +516,7 @@ describe('StorageService', () => {
 
     it('no delega categorías ajenas al flujo académico', async () => {
       fileRepo.findOne.mockResolvedValue(
-        createMockStoredFile({ ownerId: 'otro', category: FileCategory.AVATAR, isPublic: false }),
+        createMockStoredFile({ ownerId: 'otro', category: FileCategory.CHAT_ATTACHMENT, isPublic: false }),
       );
 
       await expect(

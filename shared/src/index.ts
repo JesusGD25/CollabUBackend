@@ -25,5 +25,8 @@ export * from './rabbitmq';
 // HTTP Client
 export * from './http-client';
 
+// Alcance por departamento (admin de Facultad vs admin de departamento)
+export * from './scope';
+
 // Resilience
 export * from './resilience';

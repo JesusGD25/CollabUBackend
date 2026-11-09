@@ -21,6 +21,8 @@ export class JwtAuthGuard implements CanActivate {
       id: userId,
       email: request.headers['x-user-email'],
       role: userRole,
+      adminLevel: request.headers['x-user-admin-level'] || null,
+      departmentId: request.headers['x-user-department-id'] || null,
     };
 
     return true;

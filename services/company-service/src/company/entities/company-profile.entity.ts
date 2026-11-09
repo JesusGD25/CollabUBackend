@@ -103,6 +103,20 @@ export class CompanyProfile {
   @Index()
   isActive: boolean;
 
+  /**
+   * Departamentos (programas académicos de la Facultad) en cuya área trabaja la empresa.
+   * Obligatorio (>= 1) para empresas nuevas; define qué administradores de departamento la ven y revisan.
+   */
+  @Column({ name: 'program_ids', type: 'uuid', array: true, default: () => "'{}'" })
+  programIds: string[];
+
+  /** Admin que tomó la última decisión de verificación (aprobar/rechazar/suspender). */
+  @Column({ name: 'reviewed_by', type: 'uuid', nullable: true })
+  reviewedBy: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 

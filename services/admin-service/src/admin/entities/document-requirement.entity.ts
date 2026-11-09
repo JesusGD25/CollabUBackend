@@ -53,6 +53,10 @@ export class DocumentRequirement {
   @Column({ name: 'template_file_id', type: 'uuid', nullable: true })
   templateFileId: string | null;
 
+  /** Departamento al que aplica; null = requisito global de la Facultad (solo el superadmin lo gestiona). */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
+
   @Column({ name: 'is_active', default: true })
   isActive: boolean;
 

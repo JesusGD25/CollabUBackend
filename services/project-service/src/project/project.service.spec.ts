@@ -528,6 +528,28 @@ describe('ProjectService', () => {
       );
     });
 
+    it('reviewProject: admin de departamento NO puede revisar un proyecto de otro departamento (404)', async () => {
+      const project = createMockProject({ status: ProjectStatus.PENDING_APPROVAL, academicPrograms: ['dept-ele'] } as any);
+      projectRepo.findOne.mockResolvedValue(project);
+
+      await expect(
+        service.reviewProject('project-uuid-1', 'admin-sis', 'approve', {}, { all: false, departmentId: 'dept-sis' }),
+      ).rejects.toThrow(NotFoundException);
+      expect(projectRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('reviewProject: proyecto multi-departamento lo puede aprobar el admin de cualquiera de sus departamentos', async () => {
+      const project = createMockProject({ status: ProjectStatus.PENDING_APPROVAL, academicPrograms: ['dept-sis', 'dept-ele'] } as any);
+      projectRepo.findOne.mockResolvedValue(project);
+      projectRepo.save.mockImplementation(async (p: any) => p);
+      requirementRepo.find.mockResolvedValue([createMockRequirement()]);
+
+      const result = await service.reviewProject('project-uuid-1', 'admin-ele', 'approve', {}, { all: false, departmentId: 'dept-ele' });
+
+      expect(result.status).toBe(ProjectStatus.PUBLISHED);
+      expect(project.facultyReviewerId).toBe('admin-ele');
+    });
+
     it('debería cambiar de published a in_progress', async () => {
       const project = createMockProject({ status: ProjectStatus.PUBLISHED });
       projectRepo.findOne.mockResolvedValue(project);

@@ -5,6 +5,9 @@ import {
   IsUrl,
   IsInt,
   IsUUID,
+  IsArray,
+  ArrayMinSize,
+  ArrayUnique,
   Min,
   Max,
   MinLength,
@@ -17,6 +20,16 @@ export class CreateCompanyProfileDto {
   @IsOptional()
   @IsUUID('4', { message: 'user_id debe ser un UUID v4 válido' })
   userId?: string; // Inyectado por el controller desde el JWT
+
+  @ApiProperty({
+    type: [String],
+    description: 'Departamentos (programas académicos) en cuya área trabaja la empresa. Mínimo uno.',
+  })
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Selecciona al menos un departamento de trabajo' })
+  @ArrayUnique()
+  @IsUUID('4', { each: true, message: 'Cada departamento debe ser un UUID v4 válido' })
+  programIds: string[];
 
   @ApiProperty({ example: 'Tech Solutions SAS', minLength: 2, maxLength: 200 })
   @IsString()
@@ -56,6 +69,12 @@ export class CreateCompanyProfileDto {
   @IsOptional()
   @IsUrl()
   website?: string;
+
+  @ApiPropertyOptional({ example: 'https://cdn.example.com/logo.png' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  logoUrl?: string;
 
   @ApiPropertyOptional({ example: 2015 })
   @IsOptional()

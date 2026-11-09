@@ -60,6 +60,10 @@ export class SupervisorAssignment {
   @Column({ name: 'project_id', type: 'uuid' })
   projectId: string;
 
+  /** Departamento del estudiante (snapshot de la postulación): define el alcance de los admins de departamento. */
+  @Column({ name: 'program_id', type: 'uuid', nullable: true })
+  programId: string | null;
+
   @Column({ name: 'application_id', type: 'uuid' })
   applicationId: string;
 

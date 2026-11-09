@@ -16,7 +16,7 @@ import {
   ApiTags,
   ApiParam,
 } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole, resolveDepartmentScope } from '@collab-u/shared';
 
 import { ApplicationService } from './application.service';
 import {
@@ -87,19 +87,22 @@ export class ApplicationController {
   @Get('admin/pending')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Listar postulaciones aceptadas pendientes de asignar supervisor' })
-  getAdminPending(@Query() query: ApplicationQueryDto) {
-    return this.applicationService.getAdminPendingApplications(query);
+  getAdminPending(@CurrentUser() user: any, @Query() query: ApplicationQueryDto) {
+    return this.applicationService.getAdminPendingApplications(query, resolveDepartmentScope(user));
   }
 
   @Get('admin/academic-queue')
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Cola de trabajo académico: registros por estado' })
-  getAcademicQueue(@Query() query: { status?: string; page?: string; limit?: string }) {
-    return this.applicationService.getAcademicQueue({
-      status: query.status,
-      page: query.page ? parseInt(query.page, 10) : undefined,
-      limit: query.limit ? parseInt(query.limit, 10) : undefined,
-    });
+  getAcademicQueue(@CurrentUser() user: any, @Query() query: { status?: string; page?: string; limit?: string }) {
+    return this.applicationService.getAcademicQueue(
+      {
+        status: query.status,
+        page: query.page ? parseInt(query.page, 10) : undefined,
+        limit: query.limit ? parseInt(query.limit, 10) : undefined,
+      },
+      resolveDepartmentScope(user),
+    );
   }
 
   @Get('my')

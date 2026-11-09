@@ -34,6 +34,12 @@ export class ProxyMiddleware implements NestMiddleware {
             if (req.headers['x-user-role']) {
               proxyReq.setHeader('x-user-role', req.headers['x-user-role']);
             }
+            if (req.headers['x-user-admin-level']) {
+              proxyReq.setHeader('x-user-admin-level', req.headers['x-user-admin-level']);
+            }
+            if (req.headers['x-user-department-id']) {
+              proxyReq.setHeader('x-user-department-id', req.headers['x-user-department-id']);
+            }
 
             // Re-serializar el body si ya fue parseado por Express y no es multipart/form-data.
             // Express ya consumió el stream original al parsear req.body, así que el pipe

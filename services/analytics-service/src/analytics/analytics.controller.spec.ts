@@ -57,9 +57,9 @@ describe('AnalyticsController', () => {
       const dashboard = { platformMetrics: { totalUsers: 100 }, topSkills: [], recentReports: [] };
       mockAnalyticsService.getDashboard.mockResolvedValue(dashboard);
 
-      const result = await controller.getDashboard();
+      const result = await controller.getDashboard({ id: 'f', role: 'admin', adminLevel: 'super' });
 
-      expect(mockAnalyticsService.getDashboard).toHaveBeenCalled();
+      expect(mockAnalyticsService.getDashboard).toHaveBeenCalledWith({ all: true }, undefined);
       expect(result).toEqual(dashboard);
     });
   });
@@ -179,7 +179,7 @@ describe('AnalyticsController', () => {
       const trends = [{ skillName: 'TypeScript', demandCount: 40 }];
       mockAnalyticsService.getSkillTrends.mockResolvedValue(trends);
 
-      const result = await controller.getSkillTrends({});
+      const result = await controller.getSkillTrends({ id: 'f', role: 'admin', adminLevel: 'super' }, {});
 
       expect(result).toEqual(trends);
     });
@@ -190,9 +190,9 @@ describe('AnalyticsController', () => {
       const skills = [{ skillName: 'TypeScript', demandCount: 40 }];
       mockAnalyticsService.getTopDemandedSkills.mockResolvedValue(skills);
 
-      const result = await controller.getTopDemandedSkills();
+      const result = await controller.getTopDemandedSkills({ id: 'f', role: 'admin', adminLevel: 'super' });
 
-      expect(mockAnalyticsService.getTopDemandedSkills).toHaveBeenCalledWith(10);
+      expect(mockAnalyticsService.getTopDemandedSkills).toHaveBeenCalledWith(10, { all: true }, undefined);
       expect(result).toEqual(skills);
     });
   });
@@ -207,7 +207,7 @@ describe('AnalyticsController', () => {
       const dto = { name: 'Resumen 2025-A', reportType: 'period_summary' };
       const result = await controller.generateReport(ADMIN_USER, dto as any);
 
-      expect(mockAnalyticsService.generateReport).toHaveBeenCalledWith(ADMIN_USER.id, dto);
+      expect(mockAnalyticsService.generateReport).toHaveBeenCalledWith(ADMIN_USER.id, dto, { all: true });
       expect(result).toEqual(report);
     });
   });
@@ -217,9 +217,9 @@ describe('AnalyticsController', () => {
       const reports = [{ id: 'r-1', name: 'Test' }];
       mockAnalyticsService.getReports.mockResolvedValue(reports);
 
-      const result = await controller.getReports({});
+      const result = await controller.getReports({ id: 'f', role: 'admin', adminLevel: 'super' }, {});
 
-      expect(mockAnalyticsService.getReports).toHaveBeenCalledWith({});
+      expect(mockAnalyticsService.getReports).toHaveBeenCalledWith({}, { all: true });
       expect(result).toEqual(reports);
     });
   });
@@ -229,10 +229,24 @@ describe('AnalyticsController', () => {
       const report = { id: 'r-1', name: 'Test' };
       mockAnalyticsService.getReport.mockResolvedValue(report);
 
-      const result = await controller.getReport('r-1');
+      const result = await controller.getReport({ id: 'f', role: 'admin', adminLevel: 'super' }, 'r-1');
 
-      expect(mockAnalyticsService.getReport).toHaveBeenCalledWith('r-1');
+      expect(mockAnalyticsService.getReport).toHaveBeenCalledWith('r-1', { all: true });
       expect(result).toEqual(report);
+    });
+  });
+
+  describe('alcance por departamento', () => {
+    const DEPT = { id: 'a', role: 'admin', adminLevel: 'department', departmentId: 'dept-sis' };
+
+    it('el dashboard y las tendencias llegan al servicio con el alcance del admin de departamento', async () => {
+      mockAnalyticsService.getDashboard.mockResolvedValue({});
+      mockAnalyticsService.getSkillTrends.mockResolvedValue([]);
+      await controller.getDashboard(DEPT, 'dept-ele');
+      await controller.getSkillTrends(DEPT, { programId: 'dept-ele' } as any);
+      const scope = { all: false, departmentId: 'dept-sis' };
+      expect(mockAnalyticsService.getDashboard).toHaveBeenCalledWith(scope, 'dept-ele');
+      expect(mockAnalyticsService.getSkillTrends).toHaveBeenCalledWith({ programId: 'dept-ele' }, scope);
     });
   });
 });

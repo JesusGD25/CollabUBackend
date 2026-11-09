@@ -5,6 +5,10 @@ export interface CurrentUserData {
   userId: string;
   email: string;
   role: string;
+  /** Solo para `role = admin`: 'super' | 'department'. */
+  adminLevel?: string | null;
+  /** Solo para admin de departamento: UUID del programa académico que administra. */
+  departmentId?: string | null;
 }
 
 export const CurrentUser = createParamDecorator(
@@ -17,8 +21,10 @@ export const CurrentUser = createParamDecorator(
       userId: resolvedUserId,
       email: request.headers['x-user-email'] || request.user?.email,
       role: request.headers['x-user-role'] || request.user?.role,
+      adminLevel: request.headers['x-user-admin-level'] || request.user?.adminLevel || null,
+      departmentId: request.headers['x-user-department-id'] || request.user?.departmentId || null,
     };
 
-    return data ? user[data] : user;
+    return data ? (user[data] as string) : user;
   },
 );

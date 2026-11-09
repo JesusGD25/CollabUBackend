@@ -31,7 +31,8 @@ export class CompanyEventsSubscriber implements OnModuleInit {
           await this.companyService.createProfile({
             userId,
             companyName: 'Empresa pendiente de configurar',
-          });
+            programIds: [],
+          }, true);
           this.logger.log(`Perfil de empresa base creado para: ${userId}`);
         } catch (error: any) {
           if (error.status === 409) {

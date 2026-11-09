@@ -13,7 +13,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
-import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole } from '@collab-u/shared';
+import { JwtAuthGuard, RolesGuard, Roles, CurrentUser, UserRole, resolveDepartmentScope } from '@collab-u/shared';
 
 import { CompanyService } from './company.service';
 import {
@@ -76,6 +76,26 @@ export class CompanyController {
   @ApiResponse({ status: 200, description: 'Perfil actualizado' })
   async updateProfile(@CurrentUser() user: any, @Body() dto: UpdateCompanyProfileDto) {
     return this.companyService.updateProfile(user.userId, dto);
+  }
+
+  @Post('profile/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Actualizar logo de la empresa' })
+  @ApiResponse({ status: 200, description: 'Logo actualizado' })
+  async updateLogo(@CurrentUser() user: any, @Body('logoUrl') logoUrl: string) {
+    return this.companyService.updateProfile(user.userId, { logoUrl });
+  }
+
+  @Delete('profile/logo')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.COMPANY)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Eliminar logo de la empresa' })
+  @ApiResponse({ status: 200, description: 'Logo eliminado' })
+  async deleteLogo(@CurrentUser() user: any) {
+    return this.companyService.updateProfile(user.userId, { logoUrl: null as any });
   }
 
   @Get('search')
@@ -229,12 +249,17 @@ export class CompanyController {
   @ApiOperation({ summary: 'Listar empresas con filtros (solo admin)' })
   @ApiResponse({ status: 200, description: 'Lista paginada de empresas' })
   async getAdminCompanies(
+    @CurrentUser() user: any,
     @Query('page')   page?:   string,
     @Query('limit')  limit?:  string,
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('programId') programId?: string,
   ) {
-    return this.companyService.getAdminCompanies({ page: Number(page), limit: Number(limit), search, status });
+    return this.companyService.getAdminCompanies(
+      { page: Number(page), limit: Number(limit), search, status, programId },
+      resolveDepartmentScope(user),
+    );
   }
 
   @Patch('admin/:companyId/review')
@@ -245,9 +270,13 @@ export class CompanyController {
   @ApiResponse({ status: 200, description: 'Estado de verificación actualizado' })
   @ApiResponse({ status: 404, description: 'Empresa no encontrada' })
   async reviewCompany(
+    @CurrentUser() user: any,
     @Param('companyId', ParseUUIDPipe) companyId: string,
     @Body() body: { action: 'approve' | 'reject' | 'suspend'; reason?: string },
   ) {
-    return this.companyService.reviewCompany(companyId, body.action, body.reason);
+    return this.companyService.reviewCompany(companyId, body.action, body.reason, {
+      id: user.id,
+      scope: resolveDepartmentScope(user),
+    });
   }
 }

@@ -126,10 +126,27 @@ describe('StudentController', () => {
       const expected = { data: [], total: 0, page: 1, limit: 20, totalPages: 0 };
       service.searchStudents.mockResolvedValue(expected);
 
-      const result = await controller.searchStudents(query as any);
+      const result = await controller.searchStudents(query as any, { id: 'u', role: 'student' });
 
       expect(result).toEqual(expected);
-      expect(service.searchStudents).toHaveBeenCalledWith(query);
+      // Un estudiante/empresa no tiene alcance de departamento: scope = null.
+      expect(service.searchStudents).toHaveBeenCalledWith(query, null);
+    });
+
+    it('un admin de departamento llega con su alcance (solo su programa)', async () => {
+      service.searchStudents.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
+
+      await controller.searchStudents({} as any, { id: 'a', role: 'admin', adminLevel: 'department', departmentId: 'prog-sis' });
+
+      expect(service.searchStudents).toHaveBeenCalledWith({}, { all: false, departmentId: 'prog-sis' });
+    });
+
+    it('el superadmin llega con alcance total', async () => {
+      service.searchStudents.mockResolvedValue({ data: [], total: 0, page: 1, limit: 20, totalPages: 0 });
+
+      await controller.searchStudents({} as any, { id: 'a', role: 'admin', adminLevel: 'super' });
+
+      expect(service.searchStudents).toHaveBeenCalledWith({}, { all: true });
     });
   });
 
